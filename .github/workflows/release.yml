@@ -1,0 +1,91 @@
+# 发布工作流:推送 v* 标签时构建 Windows x64 exe(PyInstaller onedir)
+# 并创建 GitHub Release、上传 zip。构建命令与 build_exe.bat / BUILD_EXE.md
+# 第 2-3 节保持一致;zip 内顶层为 RVP\ 文件夹(§5 要求)。
+name: 发布 Windows x64 exe
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# 创建 Release 需要写仓库内容的权限
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest   # Windows x64 runner(PyInstaller 不支持跨平台构建)
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      # 版本号唯一来源是 rvp/__init__.py 的 __version__(AGENTS.md)。
+      # 标签、Release zip 名必须与其一致,不一致直接失败,避免发错版本。
+      - name: 校验标签与 __version__ 一致
+        shell: pwsh
+        run: |
+          $ver = python -c "from rvp import __version__; print(__version__)"
+          if ("${{ github.ref_name }}" -ne "v$ver") {
+            Write-Error "标签 ${{ github.ref_name }} 与 rvp/__init__.py 的 __version__=$ver 不一致"
+            exit 1
+          }
+          "VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: 安装依赖
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          # requirements.txt 已含 tkinterdnd2 / pyserial(可选依赖,装上以获得完整功能)
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller
+
+      # 与 build_exe.bat 相同的命令(pwsh 续行符为反引号)。
+      # --collect-all tkinterdnd2: requirements.txt 已含,无需删行。
+      - name: 构建 exe(PyInstaller onedir)
+        shell: pwsh
+        run: |
+          python -m PyInstaller rvp_launcher.py --name RVP --onedir --windowed `
+            --icon icon\rvp.ico `
+            --add-data "rvp\assets;rvp\assets" `
+            --collect-all customtkinter `
+            --collect-all tkinterdnd2 `
+            --noconfirm
+
+      # LICENSE / THIRD-PARTY-LICENSES.txt 为发行必需(MIT + pygame-ce LGPL 合规,
+      # 且应用内许可证画面从 exe 同目录读取);README 作为说明书一并放入。
+      - name: 拷贝许可证与说明文件
+        shell: pwsh
+        run: |
+          Copy-Item LICENSE dist\RVP\ -Force
+          Copy-Item THIRD-PARTY-LICENSES.txt dist\RVP\ -Force
+          Copy-Item README.md dist\RVP\ -Force
+          if (-not (Test-Path dist\RVP\RVP.exe)) {
+            Write-Error 'dist\RVP\RVP.exe 不存在,构建失败'
+            exit 1
+          }
+
+      # -Path dist\RVP 使 zip 顶层含 RVP\ 文件夹(整套分发,勿只压 exe)
+      - name: 打包 zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist\RVP -DestinationPath "RVP-v$env:VERSION-win64.zip" -Force
+
+      - name: 创建 Release 并上传 zip
+        uses: softprops/action-gh-release@v2
+        with:
+          files: RVP-v${{ env.VERSION }}-win64.zip
+          body: |
+            ## Windows x64
+
+            1. 下载 `RVP-v${{ env.VERSION }}-win64.zip` 并解压。
+            2. 运行 `RVP\RVP.exe`(整个文件夹为一套,请勿单独移动 exe)。
+
+            > **注意**:PyInstaller 制作的 exe 可能被杀毒软件误报
+            > (已知的普遍现象)。如被拦截,请将解压目录加入排除列表,
+            > 或改用源码运行(`py -m pip install -r requirements.txt` + `py rvp_launcher.py`)。

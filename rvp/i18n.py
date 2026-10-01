@@ -626,7 +626,7 @@ EN: dict[str, str] = {
     "チャンネル{0}: ランダム再生の終了条件は「N秒で終了」か「N回再生で終了」にしてください":
         "Channel {0}: with Random, the end condition must be \"End after N seconds\" or \"End after N plays\".",
     # =104/=105: 設定ダイアログ(=113でボタン表記は「設定」)
-    "設定": "Settings",
+    "設定 (Settings)": "Settings",
     "外観": "Appearance",
     "言語": "Language",
     "描画更新頻度": "Refresh rate",

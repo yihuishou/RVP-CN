@@ -221,10 +221,10 @@ class _RVPAppHeaderMixin:
         # =353: 三語化(ユーザー決定)。旧=135「日本語表示でも英語固定」は廃止。
         # tr("設定 (Settings)") で ja=設定 (Settings) / en=Settings / zh=设置。
         # 幅は言語によらず一定(CTkButtonは幅を自動調整しない=113)。
-        # =354: ja表示が「設定 (Settings)」になるため 74→140 に拡幅(截断対策)。
+        # =354: 「設定 (Settings)」表示でも width=74 で文字は切れない(実機確認)。
         self.settings_btn = ctk.CTkButton(
             header, text=tr("設定 (Settings)"),
-            width=140, height=26,
+            width=74, height=26,
             font=ctk.CTkFont(size=13),
             fg_color=("gray80", "gray25"), hover_color=("gray72", "gray30"),
             # CTkButtonの既定文字色は明色(gray98)なので、ライトの

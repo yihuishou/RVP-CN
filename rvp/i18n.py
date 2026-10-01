@@ -11,7 +11,7 @@
 言語の決定順序:
   1. 環境変数 RVP_LANG ("ja" / "en" / "zh")  … テスト・一時切替用
   2. 設定ファイル ~/.rvp_config.json の "language"
-  3. 既定 "ja"
+  3. 既定 "zh"(=355。旧は "ja")
 
 フォールバック: en は未登録キーを日本語(=キー自身)へ、
 zh は英語(EN)経由で日本語へ(=zh → en → ja の順に下る)。
@@ -59,7 +59,9 @@ def _detect_language() -> str:
     lang = load_config().get("language")
     if lang in SUPPORTED:
         return lang
-    return "ja"
+    # =355: 既定言語を "ja" → "zh" に変更(ユーザー決定)。
+    # RVP_LANG / 設定ファイル "language" は従来どおり優先される。
+    return "zh"
 
 
 LANG = _detect_language()

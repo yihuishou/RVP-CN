@@ -25,7 +25,7 @@
 ## i18n(`rvp/i18n.py` + `rvp/i18n_zh.py`)
 
 - gettext 风格:**日语原文即翻译键**,`tr("再生")` 查 `EN`/`ZH` 字典。新增 UI 文案时键必须是日语原文;未登记的键回退日语显示。
-- 支持 ja/en/zh(`SUPPORTED = ("ja", "en", "zh")`),**默认 ja**。语言由环境变量 `RVP_LANG` 或 `~/.rvp_config.json` 的 `"language"` 决定,**启动时确定,不支持运行时切换**。
+- 支持 ja/en/zh(`SUPPORTED = ("ja", "en", "zh")`),**默认 zh**(=355)。语言由环境变量 `RVP_LANG` 或 `~/.rvp_config.json` 的 `"language"` 决定,**启动时确定,不支持运行时切换**。
 - 回退链:zh 值 → `EN` 值 → 日语键(即 `ZH.get(text, EN.get(text, text))`)。中文翻译全量在**独立文件** `rvp/i18n_zh.py` 的 `ZH` 字典(1201 键,与 `EN` 键集必须一致);改中文文案只改该文件的值,键勿动。
 - 语言选择 UI 用 `LANG_NAMES`(自称表记:日本語/English/简体中文),在 `rvp/main/app_header.py`;切后提示语用 `tr_in(new_lang, ...)` 按新语言显示。
 - 全量校验:`py tools/check_i18n_zh.py`(`tools/` 被 gitignore)。

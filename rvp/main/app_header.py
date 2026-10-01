@@ -4,7 +4,7 @@ from __future__ import annotations
 import customtkinter as ctk
 import tkinter as tk
 import warnings
-from ..i18n import LANG, load_config, set_language, tr
+from ..i18n import LANG, LANG_NAMES, load_config, set_language, tr, tr_in
 from .. import appfont, apptheme
 from tkinter import messagebox
 
@@ -200,7 +200,7 @@ class _RVPAppHeaderMixin:
         # =105: 設定はボタン1つに集約(旧: ☀/☾ボタン+言語コンボを廃止し
         # ポップアップへ移動。グラフ更新頻度=104もここに同居)。
         # 各StringVarはダイアログを開かなくても存在する(テスト・設定復元用)。
-        self.lang_var = tk.StringVar(value="日本語" if LANG == "ja" else "English")
+        self.lang_var = tk.StringVar(value=LANG_NAMES.get(LANG, "日本語"))
         self.appearance_var = tk.StringVar(value="")
         self.graph_fps_var = tk.StringVar(value="60fps")
         # =328: デバイス出力補正の上限(100%=従来 / 150%=100 超の増幅を解放)。
@@ -348,9 +348,9 @@ class _RVPAppHeaderMixin:
             command=self._on_appearance_select).pack(side="left")
         ctk.CTkOptionMenu(
             # =135: 行ラベルも常に英語 "Language"(選択肢は従来から
-            # 各言語の自称表記=「日本語」/"English" で据え置き)
+            # 各言語の自称表記=「日本語」/"English"/"简体中文" で据え置き)
             row("Language"), variable=self.lang_var, width=130, height=26,
-            values=["日本語", "English"],
+            values=list(LANG_NAMES.values()),
             fg_color=("gray80", "gray25"), button_color=("gray72", "gray30"),
             text_color=COMBO_TEXT,
             text_color_disabled=COMBO_TEXT_DISABLED,
@@ -651,13 +651,18 @@ class _RVPAppHeaderMixin:
                         else tr("ライト"))
 
     def _on_language_change(self, choice: str):
-        new_lang = "ja" if choice == "日本語" else "en"
-        if new_lang == LANG:
+        # 表示名(自称表記)→ 言語コードの逆引き。choice が未知の場合は無視。
+        rev = {v: k for k, v in LANG_NAMES.items()}
+        new_lang = rev.get(choice)
+        if new_lang is None or new_lang == LANG:
             return
         set_language(new_lang)
-        note = ("言語設定を保存しました。アプリの再起動後に反映されます。\n"
-                "Language preference saved. "
-                "It takes effect after restarting the app.")
+        # 案内文は「切り替え後」の言語で表示(表示中の LANG はまだ旧言語のまま)。
+        # 併記する英語行は、切り替え先が英語のときだけ重複を避けて足す。
+        note = tr_in(new_lang, "言語設定を保存しました。アプリの再起動後に反映されます。")
+        if new_lang != "en":
+            note += ("\nLanguage preference saved. "
+                     "It takes effect after restarting the app.")
         # =105: 設定ダイアログが開いていればインラインで案内(モーダル回避)
         lbl = getattr(self, "_settings_note", None)
         if lbl is not None and lbl.winfo_exists():

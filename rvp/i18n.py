@@ -1,7 +1,7 @@
-"""多言語対応(日本語/英語)。
+"""多言語対応(日本語/英語/中国語簡体字)。
 
 方式: gettextスタイルで「日本語の原文」を翻訳キーにする。
-  tr("再生")            → ja: "再生" / en: "Play"
+  tr("再生")            → ja: "再生" / en: "Play" / zh: "播放"
   tr("チャンネル{ch}")  → プレースホルダは呼び出し側で .format(ch=...) する
 
 言語は起動時に確定し、切り替えは再起動で反映される(ライブ切替なし)。
@@ -9,22 +9,30 @@
 セッション内で常に一貫し、既存ロジックがそのまま動く。
 
 言語の決定順序:
-  1. 環境変数 RVP_LANG ("ja" / "en")  … テスト・一時切替用
+  1. 環境変数 RVP_LANG ("ja" / "en" / "zh")  … テスト・一時切替用
   2. 設定ファイル ~/.rvp_config.json の "language"
   3. 既定 "ja"
 
-英訳が未登録のキーは日本語のまま表示される(フォールバック)。
+フォールバック: en は未登録キーを日本語(=キー自身)へ、
+zh は英語(EN)経由で日本語へ(=zh → en → ja の順に下る)。
+中国語辞書は i18n_zh.py に独立配置(肥大化回避+上流マージ時の
+コンフリクト最小化)。
 """
 
 import json
 import os
+
+from .i18n_zh import ZH   # 中国語(簡体字)辞書(i18n_zh.py に独立配置)
 
 # 設定ファイルの場所。環境変数 RVP_CONFIG_PATH で上書きできる
 # (テストが実環境の設定を読み書きしないための分離用)。
 CONFIG_PATH = os.environ.get("RVP_CONFIG_PATH") \
     or os.path.join(os.path.expanduser("~"), ".rvp_config.json")
 
-SUPPORTED = ("ja", "en")
+SUPPORTED = ("ja", "en", "zh")
+
+# 設定画面の言語コンボ表示名(各言語の自称表記)。app_header が使用。
+LANG_NAMES = {"ja": "日本語", "en": "English", "zh": "简体中文"}
 
 
 def load_config() -> dict:
@@ -70,7 +78,23 @@ def tr(text: str) -> str:
     """日本語原文を現在の言語の文字列へ変換する。"""
     if LANG == "ja":
         return text
+    if LANG == "zh":
+        # フォールバック: zh → en → ja(鍵自身)
+        return ZH.get(text, EN.get(text, text))
     return EN.get(text, text)
+
+
+def tr_in(lang: str, text: str) -> str:
+    """指定言語で変換する(言語切替直後の案内文用。LANG は変えない)。
+
+    言語保存直後はまだ起動時の LANG のままなので、切り替え後の言語を
+    明示的に指定できるこの関数で案内文を組み立てる。
+    """
+    if lang == "zh":
+        return ZH.get(text, EN.get(text, text))
+    if lang == "en":
+        return EN.get(text, text)
+    return text
 
 
 # ============================================================
@@ -618,6 +642,9 @@ EN: dict[str, str] = {
     "パープル": "Purple",
     "外観設定を保存しました。アプリの再起動後に反映されます。":
         "Appearance preference saved. "
+        "It takes effect after restarting the app.",
+    "言語設定を保存しました。アプリの再起動後に反映されます。":
+        "Language preference saved. "
         "It takes effect after restarting the app.",
     "フォント設定を保存しました。アプリの再起動後に反映されます。":
         "Font preference saved. It takes effect after restarting the app.",
@@ -2058,4 +2085,18 @@ EN: dict[str, str] = {
     '{0}: hide_visited は true / false で指定してください': '{0}: hide_visited must be true or false',
     '{0}: when_all_hidden は {{"to": ...}} で指定してください': '{0}: specify when_all_hidden as {{"to": ...}}',
     '{0} when_all_hidden': '{0} when_all_hidden',
+
+    # ---- 补全:源码 tr() 调用但原字典缺失的键(2026-10-01) ----
+    'CSV {0}: 列数が揃っていません({1}列目で{2}列)': 'CSV {0}: column count mismatch (line {1} has {2} columns)',
+    'CSV {0}: 列数は 3(タイプA) か 5(タイプB) です(先頭行={1}列)': 'CSV {0}: columns must be 3 (type A) or 5 (type B) (first line has {1} columns)',
+    "CSV {0}: 数値が不正です '{1}'": "CSV {0}: invalid number '{1}'",
+    "CSV {0}: 方向は 0(逆) か 1(正) です '{1}'": "CSV {0}: direction must be 0 (reverse) or 1 (forward), got '{1}'",
+    'CSV {0}: 時刻が負です': 'CSV {0}: time must not be negative',
+    'max': 'max',
+    'min': 'min',
+    '{0} advance': '{0} advance',
+    '{0} end': '{0} end',
+    '{0}: to は文字列か {{"random": [...]}} か {{"cond": [...]}} で指定してください': '{0}: to must be a string, {{"random": [...]}}, or {{"cond": [...]}}',
+    '{0}: 動画チャンネルの終了条件が「無限」のときは、イベントの終了条件(合計時間・変数条件・指定チャンネル終了など)が必要です': '{0}: when a video channel\'s end condition is "infinite", the event needs an end condition (total time, variable condition, specified channel end, etc.)',
+    '{0}行目': 'line {0}',
 }

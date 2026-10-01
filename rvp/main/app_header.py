@@ -218,12 +218,11 @@ class _RVPAppHeaderMixin:
         self._settings_win = None
         # =113: 表示は歯車記号「⚙」ではなく文言(記号はRobotoに字形が無く
         # 絵文字系フォントへ落ちる=112④)。
-        # =135: 表記は**日本語表示でも英語 "Settings" に固定**(ユーザー決定)。
-        # 日本語を読めない人が「設定」を読めず言語切替に辿り着けないため、
-        # 言語切替への導線(このボタン→Language行)だけは常に英語にする。
+        # =353: 三語化(ユーザー決定)。旧=135「日本語表示でも英語固定」は廃止。
+        # tr("設定") で ja=設定 / en=Settings / zh=设置。
         # 幅は言語によらず一定(CTkButtonは幅を自動調整しない=113)。
         self.settings_btn = ctk.CTkButton(
-            header, text="Settings",
+            header, text=tr("設定"),
             width=74, height=26,
             font=ctk.CTkFont(size=13),
             fg_color=("gray80", "gray25"), hover_color=("gray72", "gray30"),
@@ -315,7 +314,7 @@ class _RVPAppHeaderMixin:
             self._settings_win = None
         win = ctk.CTkToplevel(self.root)
         self._settings_win = win
-        win.title("Settings")   # =135: 言語切替導線は常に英語表記
+        win.title(tr("設定"))   # =353: 三語化(旧=135の英語固定を廃止)
         win.resizable(False, False)
         win.transient(self.root)
         win.protocol("WM_DELETE_WINDOW", self._close_settings)
@@ -463,7 +462,7 @@ class _RVPAppHeaderMixin:
         if lbl is not None and lbl.winfo_exists():
             lbl.configure(text=note)
         else:
-            messagebox.showinfo("Settings", note, parent=self.root)
+            messagebox.showinfo(tr("設定"), note, parent=self.root)
 
     def _on_show_bg_change(self):
         """=262: 背景イラストの表示ON/OFFを反映し設定へ保存する。"""
@@ -695,4 +694,4 @@ class _RVPAppHeaderMixin:
         if lbl is not None and lbl.winfo_exists():
             lbl.configure(text=note)
         else:
-            messagebox.showinfo("Settings", note, parent=self.root)
+            messagebox.showinfo(tr("設定"), note, parent=self.root)

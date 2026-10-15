@@ -67,6 +67,7 @@ class ScenarioPlayer(_ScenarioPlayerLogMixin, _ScenarioPlayerInteractMixin, _Sce
         self._choice_owner = "event"
         self._choice_vis = None                  # =352 表示中の番号(None=全件)
         self._choice_rule = None                 # =352 表示中の選択肢ルール
+        self._choice_timeout_ms = None           # =374 表示の瞬間に決めた制限(ms)
         self._choice_hidden_to = None            # =352 全部隠れたときの行き先
         self._choice_result_event = False   # 選択/既定の行き先がイベントか
         # =275: ステート移行の選択肢で「イベント宛て」が選ばれた=イベントを

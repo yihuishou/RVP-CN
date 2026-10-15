@@ -622,11 +622,32 @@ class _RVPAppPlayPagesMixin:
             self.map_state_wrap.grid_forget()
             self._map_grid.grid_rowconfigure(1, weight=0)
 
-    def _center_map_on(self, ev_id: str, positions: dict):
-        """イベント図のスクロール位置を、指定ノードが中央に来るよう動かす。"""
+    def _center_map_on(self, ev_id: str, positions: dict, _retry: int = 0):
+        """イベント図のスクロール位置を、指定ノードが中央に来るよう動かす。
+
+        =376: ②へページを切り替えた直後はキャンバスの大きさが未確定
+        (winfo_width=1)で、ノードが左寄りになっていた(中央の計算に幅1を
+        使うため)。先に配置を確定させ、それでも未確定なら少し待ってやり直す。
+        """
         if ev_id not in positions:
             return
         c = self.map_canvas
+        try:
+            c.update_idletasks()
+        except Exception:
+            pass
+        # 表示されているのに大きさが未確定のときだけ待つ(表示されていない
+        # キャンバスは待っても確定しないので従来どおりその場で計算する)
+        if (c.winfo_ismapped() and (c.winfo_width() <= 1
+                                    or c.winfo_height() <= 1)
+                and _retry < 10):
+            try:
+                self.root.after(30, lambda: self._center_map_on(
+                    ev_id, positions, _retry + 1)
+                    if self.play_page_id == "map" else None)
+            except Exception:
+                pass
+            return
         sr = (c.cget("scrollregion") or "").split()
         if len(sr) != 4:
             return

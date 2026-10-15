@@ -2093,4 +2093,7 @@ EN: dict[str, str] = {
     '未到達のイベント名を「？」表示にする': 'Show unreached event names as "?"',
     '未通過の矢印を隠す': 'Hide arrows not yet taken',
     '未到達のイベント・未通過の矢印を完全に隠す': 'Completely hide unreached events and untaken arrows',
+    # =374 選択肢のタイムリミットに変数
+    'タイムリミットの変数 {0} が {1} のため、この選択肢は無制限にします': 'Time-limit variable {0} is {1}, so this choice has no time limit',
+    '{0} timeout.seconds': '{0} timeout.seconds',
 }

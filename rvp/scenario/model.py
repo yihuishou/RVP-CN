@@ -831,7 +831,9 @@ class ChoiceRule:
     """選択肢つきのnext指定。
 
     entries      : ChoiceEntry(label, to, ops) 1〜9件
-    timeout_ms   : タイムリミット(ms)。None=無制限
+    timeout_ms   : タイムリミット(ms)。None=無制限(timeout_var があればそちら)
+    timeout_var  : =374 タイムリミットの秒数を持つ数値変数。表示の瞬間に解決する
+                   (resolve_timeout_ms)。None=定数(timeout_ms)
     on_timeout   : タイムアウト確定時に実行する変数操作(タイムリミット未設定なら発火しない)
     default_mode : デフォルト遷移先(タイムアウト時・▶▶スキップ時)の決め方
                    "first"=先頭候補(既定) / "random"=候補から等確率抽選
@@ -847,6 +849,7 @@ class ChoiceRule:
     """
     entries: list[ChoiceEntry] = field(default_factory=list)
     timeout_ms: int | None = None
+    timeout_var: str | None = None
     on_timeout: tuple = ()
     default_mode: str = "first"
     default_to: str | None = None
@@ -864,6 +867,30 @@ class ChoiceRule:
     state_mode: bool = False
     # =357: 再生タブの残り時間を「??:??」と伏せる(ログの制限秒数も伏せる)
     hide_remaining: bool = False
+
+    @property
+    def has_timeout(self) -> bool:
+        """=374: タイムリミットの指定があるか(定数 or 変数)。"""
+        return self.timeout_ms is not None or self.timeout_var is not None
+
+    def resolve_timeout_ms(self, vars_: dict) -> tuple:
+        """=374: 表示の瞬間のタイムリミット(ms)を (ms|None, 警告文|None) で返す。
+
+        定数ならそのまま。変数なら現在値(秒)を ms へ。値が数値でない/0 以下なら
+        その回だけ無制限(None)にして警告文を返す(勝手に即遷移させない)。
+        """
+        if self.timeout_var is None:
+            return self.timeout_ms, None
+        v = vars_.get(self.timeout_var)
+        try:
+            ms = int(float(v) * 1_000)
+        except (TypeError, ValueError):
+            ms = 0
+        if ms <= 0:
+            return None, tr("タイムリミットの変数 {0} が {1} のため、"
+                            "この選択肢は無制限にします").format(
+                                self.timeout_var, v)
+        return ms, None
 
     def entry_visible(self, e, vars_, visited_events=(),
                       visited_states=()) -> bool:

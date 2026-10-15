@@ -55,7 +55,7 @@ def parse_choice(ctx, raw, where, state_mode: bool = False):
     """next の choice 形式を ChoiceRule へ解析する。
 
     {"choice": [{"label": "...", "to": "..."}, ...],   1〜9件
-     "timeout": {"seconds": 30},  省略=無制限
+     "timeout": {"seconds": 30},  省略=無制限。=374: seconds は {"var": 数値変数} も可
      "default": "random" | {"to": "..."},  タイムアウト/▶▶スキップ時の行き先。
                 省略=先頭候補。旧形式のtimeout.toも受理(defaultと併記はエラー)
      "skip": "default"(既定) | "stay",  =274: "stay"=選択必須(▶▶で飛ばさない)
@@ -97,18 +97,26 @@ def parse_choice(ctx, raw, where, state_mode: bool = False):
     on_timeout = parse_ops(ctx, raw.get("on_timeout"),
                            tr("{0} on_timeout").format(where))
 
-    timeout_ms, legacy_to = None, None
+    timeout_ms, timeout_var, legacy_to = None, None, None
     traw = raw.get("timeout")
     if traw is not None:
         if not isinstance(traw, dict):
             raise ValueError(
                 tr("{0}: timeout は seconds のオブジェクトで指定してください").format(where))
         # 時間指定は秒のみ(minutesは廃止=読まない)
-        ms = int(float(traw.get("seconds", 0)) * 1_000)
-        if ms <= 0:
-            raise ValueError(
-                tr("{0}: timeout には seconds を指定してください").format(where))
-        timeout_ms = ms
+        sraw = traw.get("seconds", 0)
+        if isinstance(sraw, dict):
+            # =374: {"var": 数値変数}。秒数は選択肢を表示した瞬間に決める
+            # (実行時に 0 以下ならその回だけ無制限+ログに警告)
+            _, ref = parse_numref(ctx, sraw,
+                                  tr("{0} timeout.seconds").format(where))
+            timeout_var = ref.var
+        else:
+            ms = int(float(sraw) * 1_000)
+            if ms <= 0:
+                raise ValueError(
+                    tr("{0}: timeout には seconds を指定してください").format(where))
+            timeout_ms = ms
         if traw.get("to") is not None:   # 旧形式(timeout.to)の互換受理
             if not isinstance(traw["to"], str):
                 raise ValueError(
@@ -164,6 +172,7 @@ def parse_choice(ctx, raw, where, state_mode: bool = False):
             tr("{0}: hide_remaining は true / false で指定してください").format(where))
 
     return ChoiceRule(entries=entries, timeout_ms=timeout_ms,
+                      timeout_var=timeout_var,
                       on_timeout=on_timeout,
                       default_mode=default_mode, default_to=default_to,
                       skip_stay=(skip_raw == "stay"),

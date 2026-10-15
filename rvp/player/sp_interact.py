@@ -85,7 +85,13 @@ class _ScenarioPlayerInteractMixin:
         if self._paused:
             clock.pause()
         self._choice_clock = clock
-        self.state["choice_remaining_ms"] = rule.timeout_ms
+        # =374: タイムリミットはこの瞬間に決める(変数なら現在値。表示中に
+        # 変数が変わっても伸び縮みしない)。0 以下はこの回だけ無制限+警告
+        tmo, warn = rule.resolve_timeout_ms(self.vars)
+        if warn:
+            self._log("warn", warn)
+        self._choice_timeout_ms = tmo
+        self.state["choice_remaining_ms"] = tmo
         ui_id = event.event_id if owner == "event" \
             else "{0}/{1}".format(event.event_id, state_id)
         shown = rule.entries if vis is None else [rule.entries[i] for i in vis]
@@ -95,7 +101,7 @@ class _ScenarioPlayerInteractMixin:
                                 "colors": [e.color for e in shown],
                                 # =357: 残り時間を「??:??」と伏せる
                                 "hide_remaining": bool(rule.hide_remaining)}
-        self._log_choice_show(rule, vis)
+        self._log_choice_show(rule, vis, tmo)
         self._video_osd(tr("選択肢が表示されています(RVPウィンドウで選択)"))
         return None
 
@@ -147,7 +153,7 @@ class _ScenarioPlayerInteractMixin:
             return rule.default_to
         return self._entry_desc(0, rule.entries) or "-"
 
-    def _log_choice_show(self, rule, vis=None) -> None:
+    def _log_choice_show(self, rule, vis=None, timeout_ms="rule") -> None:
         """選択肢を表示したことをログへ残す(候補一覧・制限時間・既定)。
 
         =352: 隠した項目は「非表示: 番号)ラベル」として後ろに添える
@@ -161,11 +167,13 @@ class _ScenarioPlayerInteractMixin:
                               if i not in vis)
             items += " " + tr("(非表示: {0})").format(hidden)
         extras = []
-        if rule.timeout_ms is not None:
+        if timeout_ms == "rule":        # =374: 呼び出し側が解決済みの値を渡す
+            timeout_ms = rule.timeout_ms
+        if timeout_ms is not None:
             if rule.hide_remaining:     # =357 Q9: ④ログでも秒数を伏せる
                 extras.append(tr("制限??秒"))
             else:
-                extras.append(tr("制限{0:g}秒").format(rule.timeout_ms / 1000.0))
+                extras.append(tr("制限{0:g}秒").format(timeout_ms / 1000.0))
         extras.append(tr("既定={0}").format(self._default_desc(rule)))
         self._log("choice", tr("選択肢を表示: {0}").format(items)
                   + " (" + " / ".join(extras) + ")")
@@ -176,6 +184,7 @@ class _ScenarioPlayerInteractMixin:
         self.state["choice"] = None
         self.state["choice_remaining_ms"] = None
         self._choice_clock = None
+        self._choice_timeout_ms = None    # =374
         self._choice_entries = []
         self._choice_result = None
         self._choice_result_ops = ()
@@ -203,9 +212,12 @@ class _ScenarioPlayerInteractMixin:
                 self._to_desc(self._choice_result, self._choice_entries,
                               self._choice_result_index)))
             return self._choice_result
-        if (self.state["choice"] is not None and rule.timeout_ms is not None
+        # =374: 表示中のルールなら表示の瞬間に決めた値(変数対応)を使う
+        tmo = (self._choice_timeout_ms if self._choice_rule is rule
+               else rule.timeout_ms)
+        if (self.state["choice"] is not None and tmo is not None
                 and self._choice_clock is not None):
-            remaining = rule.timeout_ms - self._choice_clock.now_ms()
+            remaining = tmo - self._choice_clock.now_ms()
             self.state["choice_remaining_ms"] = max(0, int(remaining))
             if remaining <= 0:
                 self._apply_ops(rule.on_timeout, tr("タイムアウト時"))

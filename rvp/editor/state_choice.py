@@ -8,6 +8,7 @@ from ..i18n import tr
 from .common import CTkOptionMenu, MUTED, TEXT_MUTED
 from .choice_color import bind_choice_color
 from . import common as _clr   # =352 テーマ追従の色は定義元を参照
+from .fields import VarRefField, collect_secs_field, load_secs_field   # =374
 
 
 class StateChoiceEditor(ctk.CTkFrame):
@@ -65,9 +66,13 @@ class StateChoiceEditor(ctk.CTkFrame):
             values=[self.TLIM_NONE, self.TLIM_SEC],
             fg_color=("gray75", "gray28"), button_color=("gray70", "gray33"),
             command=lambda _v: self.update_ui()).pack(side="left", padx=6)
-        self.tsec_var = tk.StringVar(value="30")
-        self.tsec_entry = ctk.CTkEntry(tlim_row, textvariable=self.tsec_var,
-                                       width=42, height=26, justify="right")
+        # =374: 秒は定数 or 数値変数参照(VarRefField)。tsec_var は入力欄の
+        # テキスト(従来名を残す)、tsec_entry は欄全体
+        self.tsec_field = VarRefField(tlim_row, width=42)
+        self.tsec_field.entry.configure(justify="right")
+        self.tsec_var = self.tsec_field.text_var
+        self.tsec_var.set("30")
+        self.tsec_entry = self.tsec_field
         self.tsec_label = ctk.CTkLabel(tlim_row, text=tr("秒"),
                                        font=ctk.CTkFont(size=11),
                                        text_color=TEXT_MUTED)
@@ -427,9 +432,11 @@ class StateChoiceEditor(ctk.CTkFrame):
         if not self.rows:
             self.add_row()
         traw = t.get("timeout")
+        # =374: 秒欄は数値変数も選べる
+        self.tsec_field.set_names(self.owner._numeric_var_names())
         if isinstance(traw, dict):
             self.tlim_var.set(self.TLIM_SEC)
-            self.tsec_var.set(f"{float(traw.get('seconds', 0)):g}")
+            load_secs_field(self.tsec_field, traw.get("seconds", 0))
         else:
             self.tlim_var.set(self.TLIM_NONE)
         draw = t.get("default")
@@ -479,14 +486,11 @@ class StateChoiceEditor(ctk.CTkFrame):
             return tr("{0}: 選択肢は1〜9件にしてください").format(where), None
         value = {"when": {"type": "choice"}, "choice": entries}
         if self.tlim_var.get() == self.TLIM_SEC:
-            try:
-                total = float(self.tsec_var.get() or 0)
-            except ValueError:
-                total = 0
-            if total <= 0:
+            secs = collect_secs_field(self.tsec_field)     # =374
+            if secs is None:
                 mark(self.tsec_entry, "error")
                 return tr("{0}: タイムリミットの時間が不正です").format(where), None
-            value["timeout"] = {"seconds": round(total, 3)}
+            value["timeout"] = {"seconds": secs}
             if self.hrem_var.get():       # =357(既定 false は省略)
                 value["hide_remaining"] = True
         d = self.dflt_var.get()

@@ -358,10 +358,13 @@ class _ScenarioEditorPanelMixin:
             justify="right")
         self.choice_tmin_label = ctk.CTkLabel(
             tlim_row, text=tr("分"), font=ctk.CTkFont(size=11), text_color=TEXT_MUTED)
-        self.choice_tsec_var = tk.StringVar(value="30")
-        self.choice_tsec_entry = ctk.CTkEntry(
-            tlim_row, textvariable=self.choice_tsec_var, width=42, height=26,
-            justify="right")
+        # =374: 秒は定数 or 数値変数参照(VarRefField)。choice_tsec_var は
+        # 入力欄のテキスト(従来名を残す)、choice_tsec_entry は欄全体
+        self.choice_tsec_field = VarRefField(tlim_row, width=42)
+        self.choice_tsec_field.entry.configure(justify="right")
+        self.choice_tsec_var = self.choice_tsec_field.text_var
+        self.choice_tsec_var.set("30")
+        self.choice_tsec_entry = self.choice_tsec_field
         self.choice_tsec_label = ctk.CTkLabel(
             tlim_row, text=tr("秒"), font=ctk.CTkFont(size=11), text_color=TEXT_MUTED)
         # =357: 残り時間を「??:??」と伏せる(「時間指定」のときだけ出す=Q8)

@@ -796,13 +796,20 @@ class BackgroundArt:
                 if self._fwin is not None:            # =373 薄い窓は画像窓の上
                     self._fwin.lift(self._under)
                     top = self._fwin
-                # =267: rootの子トップレベル(Settings・ヘルプ・編集画面等)を
-                # オーバーレイの上へ再整列する。Settingsはtransient(owned)の
-                # ためrootの直上に保たれ、素朴なlift(root)だとオーバーレイが
-                # その上へ割り込んで薄衣がかかっていた(実機FB)。
+                # =267: rootの子トップレベル(Settings等)をオーバーレイの上へ
+                # 再整列する。Settingsはtransient(owned)のためrootの直上に
+                # 保たれ、素朴なlift(root)だとオーバーレイがその上へ割り込んで
+                # 薄衣がかかっていた(実機FB)。
+                # =375: 対象は **root に transient(owned)な窓だけ**。独立した窓
+                # (シナリオ編集画面など)まで持ち上げると、メイン窓をクリック
+                # (FocusIn→restack)するたびに編集画面が前へ出て、メイン窓を
+                # 手前にできなかった。独立した窓は OS の重ね順のまま触らない
+                # (画像窓は root の直上=lift(root)なので、root より上にある
+                # 独立窓はもともと画像窓より上にある)。
                 for w in self.root.winfo_children():
                     if w is self._under or w is self._fwin \
-                            or not isinstance(w, tk.Toplevel):
+                            or not isinstance(w, tk.Toplevel) \
+                            or not self._owned_by_root(w):
                         continue
                     try:
                         if w.winfo_viewable():
@@ -813,6 +820,14 @@ class BackgroundArt:
                 self._under.lower(self.root)
         except tk.TclError:
             pass
+
+    def _owned_by_root(self, w) -> bool:
+        """=375: w が root に transient(owned)な窓か(Settings・ヘルプ等)。"""
+        try:
+            master = str(w.wm_transient() or "")
+        except tk.TclError:
+            return False
+        return master == str(self.root)
 
     def _on_root_configure(self, e=None) -> None:
         # =264: bindtagの仕様でこのハンドラは**全子孫のConfigure**でも呼ばれる。

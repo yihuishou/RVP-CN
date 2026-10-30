@@ -8,7 +8,7 @@ import warnings
 from .. import appfont
 from ..i18n import load_config, save_config, tr
 
-from .common import MSG_WARN
+from .common import MSG_INFO, MSG_WARN
 from .fields import Tooltip
 from .user_patterns import UserPatternDialog
 from . import common as _clr   # =301: テーマ追従する色定数は定義元を参照
@@ -207,6 +207,11 @@ class _ItemReviewPatternsMixin:
             except Exception:
                 pass
             c.release_job = None
+            c.release_at = None             # =379: 離した時刻の控えも取り消す
+            if c.hold is not None and c.job is None:
+                # =379: 離した扱いで止めていた書き込みを再開(押しっぱなしの継続)
+                c.job = self.after(self.CHAIN_POLL_MS,
+                                   lambda sd=side: self._hold_tick(sd))
         if c.held == fk:
             return "break"              # OS の自動リピートは無視
         if c.held is not None:
@@ -215,7 +220,20 @@ class _ItemReviewPatternsMixin:
             if self._fkey_map.get(fk) is None:
                 return "break"
             c.held = fk
+            if c.hold is not None:
+                self._hold_switch(c.hold, fk, side)   # =379: 次のパターンから
             return "break"
+        if self._fk_hold_active():
+            # =379: 「押している間だけ」(再生中・回転/振動のときだけ)
+            sess = self._hold_start(fk, side)
+            if sess is not None:
+                c.held = fk
+                c.hold = sess
+                self._chain_stop_job(side)
+                c.job = self.after(self.CHAIN_POLL_MS,
+                                   lambda sd=side: self._hold_tick(sd))
+            # 割り当ての無いキーは従来どおり素通し(_on_fkey と同じ)
+            return "break" if self._fkey_map.get(fk) is not None else None
         r = self._on_fkey(fk)
         if r == "break" and self._fkey_map.get(fk) is not None:
             c.held = fk
@@ -262,9 +280,210 @@ class _ItemReviewPatternsMixin:
                 self.after_cancel(c.release_job)
             except Exception:
                 pass
+        if c.hold is not None:
+            # =379: 停止を打つのは**離した瞬間**の位置(自動リピートの確定待ちの
+            # 間に再生位置が進んでも、その分は書かない=書き込みの tick も止める。
+            # 自動リピートで押し直されたら _on_fkey_press が再開する)
+            c.release_at = self._now_ms() + self._time_adj_ms()
+            self._chain_stop_job(side)
         c.release_job = self.after(self.FKEY_RELEASE_MS,
-                                   lambda sd=side: self._chain_stop(sd))
+                                   lambda sd=side: self._fk_release_confirm(sd))
         return "break"
+
+    def _fk_release_confirm(self, side: int):
+        """KeyRelease の確定(自動リピートでなかった)。=379 の押している間だけ
+        なら離した位置で締めてから、数珠つなぎの状態を片付ける。"""
+        c = self._fk_chain[side]
+        if c.hold is not None:
+            self._hold_finish(side, c.release_at)
+        self._chain_stop(side)
+
+    # ---- =379: Fキー「押している間だけ」 ----
+    def _fk_hold_active(self) -> bool:
+        """いま押した Fキーを「押している間だけ」で扱うか。モードが hold・
+        回転/振動のトラック・**再生中**(停止中は丸ごと配置=Q3/Q15)。"""
+        return getattr(self, "_fk_mode", "whole") == "hold" and \
+            bool(self._playing) and self.edit_mode and self._edit_built and \
+            self.edit_model is not None and self._fk_mode_applicable()
+
+    def _fk_shape(self, fk: str, side: int):
+        """割り当てたパターンの (名前, 形, 基準 pos)。無ければ None。
+        =379: _on_fkey から抽出(押している間だけと共用)。上下反転も反映。"""
+        from .. import script_edit
+        ref = self._fkey_map.get(fk)
+        if ref is None:
+            return None
+        g = self._edit_graphs[self._fk_targets(side)[0]]
+        if ref[0] == "user":
+            ukey = self._user_key(ref[1])      # =231: 枠番号→今の種別の枠
+            shape = self._user_patterns.get(ukey)
+            if not shape:
+                return None
+            name, base = ukey, None
+        else:
+            try:
+                name, shape = self._std_patterns()[int(ref[1])]
+            except (IndexError, ValueError, TypeError):
+                return None
+            # =226: 離散的なスクリプトは **定義どおりの高さで固定**
+            # (pos50 基準へずらすのは linear/twist のときだけ)
+            base = None if g.pat_center is not None else 50
+        if self._edit_invert:
+            shape = script_edit.invert_shape(shape)
+        return name, shape, base
+
+    def _hold_rel(self, i: int, shape):
+        """モデル i での相対点列(at0=0 の計画)。置けない形は None。"""
+        g, m = self._edit_graphs[i], self._edit_models[i]
+        plan = m.pattern_plan(shape, 0, None, g.grid_at, g.grid_pos,
+                              scale=self._edit_scale)
+        if plan is None or len(plan["points"]) < 2:
+            return None
+        return [(int(round(a)), int(p)) for a, p in plan["points"]]
+
+    def _hold_stop_pos(self) -> int:
+        """離したときの停止値。回転=中心(速度0) / 振動=0。"""
+        from .. import script_edit
+        if self._pat_mode() == script_edit.PAT_MODE_ROTATE:
+            return int(round(50 * self._edit_pos_max() / 100.0))
+        return 0
+
+    def _hold_start(self, fk: str, side: int):
+        """押した瞬間: 押した位置に開始点を打ち、セッションを返す(UNDO は
+        ここで1つ積む)。置けなければ None(警告は従来どおり edit_msg)。"""
+        from .. import script_edit
+        from ..script_edit.hold import (HOLD_OFFSET_STEP_MS, HoldFeed,
+                                        HoldSession, random_offset, rel_len)
+        sh = self._fk_shape(fk, side)
+        if sh is None:
+            return None
+        _name, shape, _base = sh
+        now_at = max(0.0, self._now_ms() + self._time_adj_ms())
+        entries = []
+        off = None
+        for i in self._fk_targets(side):
+            rel = self._hold_rel(i, shape)
+            if rel is None:
+                continue
+            length = rel_len(rel)
+            if off is None:
+                # ランダムは押した瞬間に1回だけ決め、左右で共用(Q13)
+                off = random_offset(length) \
+                    if getattr(self, "_fk_start", "head") == "random" else 0
+            o = min(off, max(0, length - HOLD_OFFSET_STEP_MS)) if off else 0
+            g, m = self._edit_graphs[i], self._edit_models[i]
+            at0 = int(script_edit.snap(now_at, g.grid_at))
+            feed = HoldFeed(rel, at0, o)
+            token = m.hold_write(at0, at0, feed.take(at0), lo_inclusive=True)
+            entries.append({"idx": i, "model": m, "feed": feed, "at0": at0,
+                            "written": at0, "token": token})
+            g.sel_pattern = None
+            g.redraw()
+        if not entries:
+            self._edit_paste_warned = True
+            self.edit_msg.configure(
+                text=tr("この位置にはパターンを配置できません"),
+                text_color=MSG_WARN)
+            return None
+        self._edit_on_change()
+        if getattr(self, "_fk_start", "head") == "random":
+            # Q14: どこから引用したかを出す
+            self.edit_msg.configure(
+                text=tr("{0}: {1}秒から引用").format(
+                    fk, "{0:.1f}".format((off or 0) / 1000.0)),
+                text_color=MSG_INFO)
+        return HoldSession(fk, entries, self._hold_stop_pos())
+
+    def _hold_alive(self, sess) -> bool:
+        """セッションのモデルが今も編集中のものか(トラックを切り替えたら捨てる)。"""
+        try:
+            if not self.winfo_exists() or not self.edit_mode or \
+                    not self._edit_built:
+                return False
+        except Exception:
+            return False
+        models = list(self._edit_models)
+        return all(e["idx"] < len(models) and models[e["idx"]] is e["model"]
+                   for e in sess.entries)
+
+    def _hold_switch(self, sess, fk: str, side: int):
+        """押しっぱなし中に同じ側の別の Fキー: 次のパターンからその形(0秒から)。"""
+        sh = self._fk_shape(fk, side)
+        if sh is None:
+            return
+        sess.fk = fk
+        for e in sess.entries:
+            rel = self._hold_rel(e["idx"], sh[1])
+            if rel is not None:
+                e["feed"].set_next(rel)
+
+    def _hold_tick(self, side: int):
+        """押している間: 再生位置が通過したぶんだけ書き込む(30ms ごと)。"""
+        c = self._fk_chain[side]
+        c.job = None
+        sess = c.hold
+        if sess is None:
+            return
+        if not self._hold_alive(sess):
+            c.hold = None               # トラック切り替え等=黙って捨てる
+            return
+        now_at = int(self._now_ms() + self._time_adj_ms())
+        changed = False
+        for e in sess.entries:
+            if now_at <= e["written"]:
+                continue                # 止まっている/戻した=書かない
+            m = e["model"]
+            pts = e["feed"].take(now_at)
+            before = m.points
+            e["token"] = m.hold_write(e["written"], now_at, pts,
+                                      token=e["token"])
+            e["written"] = now_at
+            if m.points is not before:
+                changed = True
+                self._edit_graphs[e["idx"]].redraw()
+        if changed:
+            self._hold_on_change()
+        c.job = self.after(self.CHAIN_POLL_MS,
+                           lambda sd=side: self._hold_tick(sd))
+
+    def _hold_on_change(self):
+        """書き込みのたびの後始末(引用位置の表示は消さない)。"""
+        msg = self.edit_msg.cget("text")
+        col = self.edit_msg.cget("text_color")
+        self._edit_on_change()
+        if msg and not self.edit_msg.cget("text"):
+            self.edit_msg.configure(text=msg, text_color=col)
+
+    def _hold_finish(self, side: int, at=None):
+        """離した: 離した位置まで書き込み、そこへ停止を打つ。最短でも押した
+        位置+1グリッド(押した位置の開始点を停止で消さないため)。"""
+        from ..script_edit import snap as script_edit_snap
+        c = self._fk_chain[side]
+        sess, c.hold = c.hold, None
+        c.release_at = None
+        if sess is None or not self._hold_alive(sess):
+            return
+        if at is None:
+            at = self._now_ms() + self._time_adj_ms()
+        changed = False
+        for e in sess.entries:
+            g, m = self._edit_graphs[e["idx"]], e["model"]
+            ga = max(1, int(g.grid_at))
+            rel_at = int(script_edit_snap(max(0.0, at), ga))
+            rel_at = max(rel_at, e["at0"] + ga)
+            pts = e["feed"].take(rel_at, before=True) + [(rel_at, sess.stop)]
+            # 吸着で離した位置が書き込み済みの位置より手前になったら、その
+            # 間に書いた点は消す(停止より後ろに自分の点を残さない)
+            lo = min(int(e["written"]), rel_at)
+            hi = max(int(e["written"]), rel_at)
+            before = m.points
+            e["token"] = m.hold_write(lo, hi, pts, token=e["token"])
+            e["written"] = rel_at
+            if m.points is not before:
+                changed = True
+                g.redraw()
+        if changed:
+            self._hold_on_change()
 
     def _fk_last_end(self, side: int):
         """直前の配置の終端(次の数珠つなぎの起点)。両方(2)は左右で置けた
@@ -295,6 +514,11 @@ class _ItemReviewPatternsMixin:
             c.release_job = None
             c.held = None
             c.chain_end = None
+            # =379: 押している間だけのセッションは、ここでは締めずに捨てる
+            # (離した確定・モード切替は _hold_finish を先に呼ぶ。閉じる・
+            # 編集モードを抜けるときは停止を書き足さない)
+            c.hold = None
+            c.release_at = None
         self._chain_stop_job(side)
         # =336: 数字キーの押しっぱなし状態も忘れる(閉じる・切り替え時。
         # side 付きは F キーの数珠つなぎだけを止めるので数字キーは触らない)
@@ -465,33 +689,17 @@ class _ItemReviewPatternsMixin:
         (マウスがグラフの外にあるときは従来どおり再生位置)。
         at0 を渡すと**その素材時刻**を起点にする(=222 の数珠つなぎ)。
         =312: 左右2本のときは割り当ての側(_fkey_sides)へ置く。"""
-        from .. import script_edit
         if not self.edit_mode or not self._edit_built or \
                 self.edit_model is None:
-            return None
-        ref = self._fkey_map.get(fk)
-        if ref is None:
             return None
         if side is None:
             side = self._fk_side_of(fk)
         targets = self._fk_targets(side)
         g = self._edit_graphs[targets[0]]
-        if ref[0] == "user":
-            ukey = self._user_key(ref[1])      # =231: 枠番号→今の種別の枠
-            shape = self._user_patterns.get(ukey)
-            if not shape:
-                return None
-            name, base = ukey, None
-        else:
-            try:
-                name, shape = self._std_patterns()[int(ref[1])]
-            except (IndexError, ValueError, TypeError):
-                return None
-            # =226: 離散的なスクリプトは **定義どおりの高さで固定**
-            # (pos50 基準へずらすのは linear/twist のときだけ)
-            base = None if g.pat_center is not None else 50
-        if self._edit_invert:
-            shape = script_edit.invert_shape(shape)
+        sh = self._fk_shape(fk, side)          # =379: 抽出(上下反転込み)
+        if sh is None:
+            return None
+        name, shape, base = sh
         pos0 = None
         if at0 is None:
             # =227: **再生中でないときは、グラフ上のマウス位置へ置く**

@@ -2096,4 +2096,30 @@ EN: dict[str, str] = {
     # =374 選択肢のタイムリミットに変数
     'タイムリミットの変数 {0} が {1} のため、この選択肢は無制限にします': 'Time-limit variable {0} is {1}, so this choice has no time limit',
     '{0} timeout.seconds': '{0} timeout.seconds',
+    # =379 Fキーの配置モード(押している間だけ)・開始位置
+    'Fキーの配置モード': 'F-key placement',
+    '丸ごと配置': 'Whole pattern',
+    '押している間だけ': 'While held',
+    '開始位置': 'Start at',
+    '先頭から': 'Beginning',
+    '{0}: {1}秒から引用': '{0}: from {1} s into the pattern',
+    "Fキーの配置モード（Ctrl+H で切り替え）\n丸ごと配置: 押した位置からパターンを最後まで置きます（パターン=緑）\n押している間だけ: 再生中、押している間だけパターンの動きを書き込み、離した位置で停止を打ちます（普通の点=青）。停止中は丸ごと配置":
+        "F-key placement (Ctrl+H toggles)\n"
+        "Whole pattern: place the whole pattern from the press position (pattern = green)\n"
+        "While held: during playback, write the pattern's motion only while the key is held "
+        "and add a stop where it is released (plain points = blue). When stopped, the whole pattern is placed",
+    "押している間だけ配置するときの開始位置（Ctrl+R で切り替え）\n先頭から: パターンの0秒から\nランダム: パターンの途中（0.1秒刻み）からランダムに引用。押し続けて2本目以降は0秒から":
+        "Where \"While held\" starts in the pattern (Ctrl+R toggles)\n"
+        "Beginning: from 0 s of the pattern\n"
+        "random: from a random point in the pattern (0.1 s steps); "
+        "when held into the next repeat, it starts from 0 s",
+    # =380 メイン画面からのスクリプト編集・D&D・参考メディア
+    'スクリプト編集 - RVP': 'Edit script - RVP',
+    '対応していないファイルです: {0}': 'Unsupported file: {0}',
+    'シナリオのアイテムでは音声・動画は差し替えられません（funscript/csv は読み込めます）': "A scenario item's audio/video can't be replaced here (funscript/csv can be loaded)",
+    'ファイルが見つかりません': 'file not found',
+    # =382 案内文をユーザー指定の文言へ
+    '(funscript/csvをD&Dで読み込めます)': '(drag & drop funscript/csv to load)',
+    '音声・動画(D&D可)': 'Audio/video (drag & drop)',
+    '別の種別のスクリプトを新しく作る': 'Create a new script of another type',
 }

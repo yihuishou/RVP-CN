@@ -56,6 +56,11 @@ class ScenarioPlayer(_ScenarioPlayerLogMixin, _ScenarioPlayerInteractMixin, _Sce
         self._silent_streak = 0
         # =63: シークバー追従先がスクリプト専用チャンネルか
         self._seek_script = False
+        # =377: 追従先がスクリプト専用 ch かつ「N秒で終了」のとき、シークバーは
+        # そのチャンネルの進み具合(0→N秒)を表示する(表示専用・シーク不可)。
+        # _seek_progress_base_ms は今のアイテムより前に経過した時間(ms)。
+        self._seek_progress = False
+        self._seek_progress_base_ms = 0.0
         self._choice_clock: PlaybackClock | None = None
         self._choice_entries: list = []          # ChoiceEntryのリスト
         self._choice_result: str | None = None
@@ -90,6 +95,12 @@ class ScenarioPlayer(_ScenarioPlayerLogMixin, _ScenarioPlayerInteractMixin, _Sce
         self._watch_fired: set[int] = set()     # once=Trueの発火済みインデックス
         self._watch_goto: str | None = None     # gracefulの保留遷移先
         self._fs_resync = False
+        # =378: 停止の猶予(sp_devices の _ds_*)。レーン→送る時刻、
+        # イベント終わりの全停止の送る時刻、その後に使い始めたレーン、タイマー
+        self._ds_pending: dict = {}
+        self._ds_all: float | None = None
+        self._ds_claimed: set = set()
+        self._ds_task = None
         # デバイス動作タイミングのオフセット(ms)。種別ごとに独立。
         # 正の値=音声より遅らせる / 負の値=音声より早める(funscriptを先読み)。
         # UIスレッドから直接書き換えられる(読み書きは各ループで都度参照)。
@@ -276,6 +287,7 @@ class ScenarioPlayer(_ScenarioPlayerLogMixin, _ScenarioPlayerInteractMixin, _Sce
         self._bg_cur = self._BG_UNSET   # =347: 再生のたびに引き継ぐ背景なしから
         self._item_snd_cache = None     # =348: 音声の使い回しはシナリオ単位
         self._stop_requested = False
+        self._ds_reset()                # =378
         self._paused = False
         self.state["scenario_title"] = scenario.title
         self.state["status"] = "playing"
@@ -388,6 +400,7 @@ class ScenarioPlayer(_ScenarioPlayerLogMixin, _ScenarioPlayerInteractMixin, _Sce
                 await self._bgm_stop(fade=True)
             except Exception:
                 pass
+            self._ds_reset()          # =378: 保留中の停止は stop_all に含まれる
             try:
                 await self.intiface.stop_all()
             except Exception:
@@ -481,6 +494,7 @@ class ScenarioPlayer(_ScenarioPlayerLogMixin, _ScenarioPlayerInteractMixin, _Sce
             except Exception:
                 pass
         self.state["status"] = "paused"
+        self._ds_reset()              # =378
         try:
             await self.intiface.stop_all()
         except Exception:
@@ -543,6 +557,7 @@ class ScenarioPlayer(_ScenarioPlayerLogMixin, _ScenarioPlayerInteractMixin, _Sce
         s["channel_audio"] = {}
         s["elapsed_ms"] = 0
         s["duration_ms"] = 0
+        s["seek_progress"] = False     # =377 シークバーがチャンネルの進み具合表示
         s["event_elapsed_ms"] = 0
         s["state_elapsed_ms"] = 0
         s["linear_pos"] = 0
@@ -587,6 +602,7 @@ class ScenarioPlayer(_ScenarioPlayerLogMixin, _ScenarioPlayerInteractMixin, _Sce
             await self._bgm_stop(fade=False)
         except Exception:
             pass
+        self._ds_reset()              # =378
         try:
             await self.intiface.stop_all()
         except Exception:
@@ -599,6 +615,9 @@ class ScenarioPlayer(_ScenarioPlayerLogMixin, _ScenarioPlayerInteractMixin, _Sce
         self._reset_state_ready(scenario_title)
 
     SOFT_START_SEC = 2.0       # スマートスタート期間
+    # =378: スクリプトのみアイテムの終わり・イベントの終わりで停止を保留する
+    # 時間(ms)。この間に次のスクリプトが同じデバイスを使い始めたら送らない
+    STOP_GRACE_MS = 300
 
     SOFT_MIN_FRAC = 0.15       # 期間開始直後の速度上限(通常上限に対する割合)
 
@@ -614,6 +633,9 @@ class ScenarioPlayer(_ScenarioPlayerLogMixin, _ScenarioPlayerInteractMixin, _Sce
         if self.state.get("no_seek"):
             # =359: シーク禁止のノード(UI 側も無効表示にしているが、
             # 呼び出し経路によらずここで止める)
+            return
+        if self.state.get("seek_progress"):
+            # =377: チャンネルの進み具合の表示中はシークしない(表示専用)
             return
         duration = self.state["duration_ms"]
         if duration <= 0:
@@ -687,6 +709,9 @@ class ScenarioPlayer(_ScenarioPlayerLogMixin, _ScenarioPlayerInteractMixin, _Sce
             clk = self._video_clock if self._video_clock is not None \
                 else self.clock
             ms = int(clk.now_ms())
+            if self._seek_progress:
+                # =377: チャンネルの進み具合=前のアイテムまでの経過+今の時計
+                ms = int(self._seek_progress_base_ms + ms)
         except Exception:
             return base
         if ms < 0 or abs(ms - base) > 500:
@@ -838,10 +863,17 @@ class ScenarioPlayer(_ScenarioPlayerLogMixin, _ScenarioPlayerInteractMixin, _Sce
                     await choice_task
                 except asyncio.CancelledError:
                     pass
-            try:
-                await self.intiface.stop_all()
-            except Exception:
-                pass
+            if (self._ds_pending and not self._stop_requested
+                    and self._jump is None):
+                # =378: 最後に動いていたのがスクリプトのみアイテム=次の
+                # イベントが同じデバイスをすぐ使うなら止めない(猶予付き)
+                self._ds_defer_all()
+            else:
+                self._ds_reset()
+                try:
+                    await self.intiface.stop_all()
+                except Exception:
+                    pass
 
         if self._jump:
             if (self._jump == "next" and event.next_choice is not None
@@ -930,6 +962,10 @@ class ScenarioPlayer(_ScenarioPlayerLogMixin, _ScenarioPlayerInteractMixin, _Sce
         # =358/=359: ノードの表示制限(引き継がない=入場のたびに上書き)
         self.state["hide_time"] = bool(st.hide_time)
         self.state["no_seek"] = bool(st.no_seek)
+        # =377: 進み具合表示はノードごとに決め直す(音声なしノード等で前の
+        # ノードの値が残らないよう、入場時にいったん戻す)
+        self._seek_progress = False
+        self.state["seek_progress"] = False
 
         # ステート開始時の変数操作(再入のたびに発火する)
         self._apply_ops(st.on_start, tr("ステート開始時"))
@@ -1008,6 +1044,20 @@ class ScenarioPlayer(_ScenarioPlayerLogMixin, _ScenarioPlayerInteractMixin, _Sce
         for ch_id in sorted(st.channels):
             channel = st.channels[ch_id]
             ch_end_resolved[ch_id] = channel.resolve_end(self.vars)
+        # =377: スクリプト専用 ch に追従し、その ch が「N秒で終了」なら、
+        # シークバーはスクリプト1本ごとではなく ch 全体の進み具合(0→N秒)を
+        # 出す(短いスクリプトを次々流すと全長とつまみが毎回入れ替わり
+        # ちらつくため=ユーザー FB)。この間はシーク不可(表示専用)。
+        self._seek_progress = bool(
+            self._seek_script and pch.end_type == END_DURATION
+            and ch_end_resolved[primary][1] > 0)
+        self._seek_progress_base_ms = 0.0
+        self.state["seek_progress"] = self._seek_progress
+        if self._seek_progress:
+            self.state["duration_ms"] = int(ch_end_resolved[primary][1])
+            self.state["elapsed_ms"] = 0
+        for ch_id in sorted(st.channels):
+            channel = st.channels[ch_id]
             desc = channel.describe(*ch_end_resolved[ch_id])
             extra = []
             dt = sorted(ch_device_types.get(ch_id, set()))

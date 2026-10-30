@@ -237,6 +237,22 @@ class _RVPAppHeaderMixin:
         )
         self.settings_btn.pack(side="right", padx=(0, 10))
 
+        # =380: 「スクリプト編集」= funscript/csv の単独編集(シナリオに紐づかない)。
+        # 並びは ヘルプ｜スクリプト編集｜Settings(ユーザー決定 Q1=案2)。
+        # side="right" は後に pack したものが左へ来るので、Settings の次・
+        # ヘルプの前に pack する。ヘッダーが広がるぶん最小幅も広がる
+        # (_ensure_header_width が実測。日本語で約 718→836px)。
+        self._script_dlg = None
+        self.script_btn = ctk.CTkButton(
+            header, text=tr("スクリプト編集"),
+            width=(110 if LANG == "ja" else 100), height=26,
+            font=ctk.CTkFont(size=13),
+            fg_color=("gray80", "gray25"), hover_color=("gray72", "gray30"),
+            text_color=("gray10", "gray90"),
+            command=self._open_script_editor,
+        )
+        self.script_btn.pack(side="right", padx=(0, 8))
+
         # =118: ヘルプは編集画面のツールバーから**メイン画面のヘッダーへ移動**
         # (ユーザー決定=「設定」の左隣。視聴だけの人にも届く場所にする)。
         # 見た目は「設定」と揃える。side="right" は後にpackしたものが左へ来る。
@@ -275,6 +291,43 @@ class _RVPAppHeaderMixin:
             self._help_dlg = None
         from ..editor import HelpDialog
         self._help_dlg = HelpDialog(self.root)
+
+    def _open_script_editor(self):
+        """=380: メイン画面から funscript/csv の編集画面(単独)を開く。
+
+        すでに開いていれば前面化するだけ(編集中の内容は残す)。シナリオ編集
+        画面のアイテムレビュー(B)が開いていれば、未保存の確認(保存する/
+        破棄する/やめる)のうえで閉じてから開く(1窓・後勝ち=Q5)。「やめる」
+        なら何もしない。戻り値=開いた画面(開かなければ None)。"""
+        dlg = getattr(self, "_script_dlg", None)
+        try:
+            if dlg is not None and dlg.winfo_exists():
+                dlg.front()
+                return dlg
+        except Exception:
+            pass
+        self._script_dlg = None
+        win = getattr(self, "_editor_win", None)
+        rv = getattr(win, "_review_dlg", None) if win is not None else None
+        try:
+            if rv is not None and rv.winfo_exists():
+                if not rv.close():
+                    rv.front()
+                    return None
+                win._review_dlg = None
+        except Exception:
+            pass
+        from ..editor import ItemReviewDialog
+        spec = {"name": "", "audio": "", "video": "", "audio_lo": 0.0,
+                "audio_hi": None, "tracks": [], "warn": []}
+        dlg = ItemReviewDialog(self.root, spec, host=self, owner=None,
+                               row=None, standalone=True)
+        try:
+            dlg.refresh_ms = self._graph_interval_ms
+        except Exception:
+            pass
+        self._script_dlg = dlg
+        return dlg
 
     def _open_settings(self):
         """=105: 設定ポップアップ(外観/言語/描画更新頻度)を開く。
@@ -499,6 +552,9 @@ class _RVPAppHeaderMixin:
             dlg = getattr(win, "_review_dlg", None) if win else None
             if dlg is not None and dlg.winfo_exists():
                 dlg.refresh_ms = self._graph_interval_ms
+            sd = getattr(self, "_script_dlg", None)     # =380: 単独の編集画面も
+            if sd is not None and sd.winfo_exists():
+                sd.refresh_ms = self._graph_interval_ms
         except Exception:
             pass
 

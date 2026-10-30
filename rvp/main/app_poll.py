@@ -230,7 +230,9 @@ class _RVPAppPollMixin:
 
         # シークバー(ドラッグ中はユーザー操作を優先して上書きしない)
         # =359: シーク禁止のノードではバー・↺10/↻10 を無効表示にする
-        seekable = playing and duration > 0 and not st.get("no_seek")
+        # =377: チャンネルの進み具合の表示中(seek_progress)も表示専用
+        seekable = (playing and duration > 0 and not st.get("no_seek")
+                    and not st.get("seek_progress"))
         # =361: シーク禁止の間は時間の右隣に黄色で「(シーク禁止)」
         lock = playing and bool(st.get("no_seek"))
         if lock and not self.seek_lock_label.winfo_manager():

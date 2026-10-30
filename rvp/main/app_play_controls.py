@@ -65,7 +65,8 @@ class _RVPAppPlayControlsMixin:
         """
         if self.player.state["status"] not in ("playing", "paused"):
             return
-        if self.player.state.get("no_seek"):     # =359 シーク禁止のノード
+        if (self.player.state.get("no_seek")     # =359 シーク禁止のノード
+                or self.player.state.get("seek_progress")):   # =377 表示専用
             return
         now = float(self.graph_view.snapshot.get("now_ms", 0.0))
         delta = int(round(float(ms) - now))
@@ -74,7 +75,8 @@ class _RVPAppPlayControlsMixin:
         self.runner.submit(self.player.seek_relative(delta))
 
     def _on_seek_press(self, _event):
-        if self.player.state.get("no_seek"):     # =359 シーク禁止のノード
+        if (self.player.state.get("no_seek")     # =359 シーク禁止のノード
+                or self.player.state.get("seek_progress")):   # =377 表示専用
             return
         if self.player.state["status"] in ("playing", "paused"):
             self._seek_dragging = True

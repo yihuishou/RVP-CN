@@ -11,6 +11,7 @@ from ..i18n import tr
 
 from .clock import PlaybackClock, describe_audio_load_error
 from .common import _CH_SLOT, logger
+from .sp_devices import ds_lanes
 
 
 class _ScenarioPlayerChannelMixin:
@@ -69,6 +70,9 @@ class _ScenarioPlayerChannelMixin:
             if is_primary and clock is not None:
                 # =348: 再生位置(変数への代入用)=区間の開始+このアイテムの時計
                 self._pos_src = (item.start_s * 1000.0, clock)
+            if is_primary:
+                # =377: 進み具合表示の起点=このアイテムより前に経過した時間
+                self._seek_progress_base_ms = ch_elapsed_ms
             if item.video:
                 limit = None
                 if channel.end_type == END_DURATION:
@@ -212,6 +216,7 @@ class _ScenarioPlayerChannelMixin:
         if interval_ms <= 0:
             return 0.0
         # 担当チャンネルのインターバル中は担当デバイスを停止(funscript間の空白)
+        self._ds_drop(ds_lanes(device_types))     # =378: いま止めるので保留は不要
         if TRACK_ROTATE in device_types:
             try:
                 await self.intiface.send_rotate(50)
@@ -317,6 +322,10 @@ class _ScenarioPlayerChannelMixin:
             self.state["duration_ms"] = duration_ms
 
         if device_types and clock is not None and self._device_output_on():
+            # =378: 直前がスクリプトのみアイテムで停止を保留中なら、この音声が
+            # 動かすレーンはいま止める(音声の切り替わりでは止まる=従来どおり)
+            await self._ds_flush(ds_lanes(
+                t for t in device_types if item.tracks_of(t)))
             # トラックは _load_track_src が区間(=59)を適用して返す
             if TRACK_LINEAR in device_types:
                 linear = item.tracks_of(TRACK_LINEAR)
@@ -466,12 +475,15 @@ class _ScenarioPlayerChannelMixin:
         # 再生タブの表示(音声欄)にはスクリプトファイル名を出す
         self.state["channel_audio"][channel.channel_id] = \
             item.tracks[0].funscript if item.tracks else ""
+        progress = is_primary and self._seek_progress
         if is_primary:
             # =63: スクリプト専用chがシークバー追従チャンネルのときは、
             # スクリプトの長さを全長として表示・シークできるようにする
+            # (=377: ch が「N秒で終了」のときは全長=N秒のまま=ch の進み具合)
             self.state["audio_file"] = \
                 item.tracks[0].funscript if item.tracks else ""
-            self.state["duration_ms"] = duration_ms
+            if not progress:
+                self.state["duration_ms"] = duration_ms
 
         # 再生開始時の変数操作(音声アイテムと同じタイミング)
         self._apply_ops(item.on_play, tr("アイテム再生時"))
@@ -481,6 +493,10 @@ class _ScenarioPlayerChannelMixin:
         had_rotate = False
         had_rotate_a10 = False
         had_vibration = False
+        if self._device_output_on():
+            # =378: 前のスクリプトのみアイテムが保留した停止を取り消す
+            # (同じデバイスを続けて動かすので止めない)
+            self._ds_claim(ds_lanes(t for t in loaded if t in device_types))
         for ttype, src in loaded.items():
             if not self._device_output_on():
                 break        # =252: デバイス連動OFF=ランナーを起動しない
@@ -498,18 +514,20 @@ class _ScenarioPlayerChannelMixin:
                 had_rotate = True
                 if src.steps:
                     fs_tasks.append(asyncio.ensure_future(
-                        self._run_rotate_timeline(src, clock, "ufo")))
+                        self._run_rotate_timeline(src, clock, "ufo",
+                                                  hold_tail=duration_ms)))
                     graph_segs += self._graph_add_track(ttype, src, clock)
             elif ttype == TRACK_ROTATE_A10:
                 had_rotate_a10 = True
                 if src.steps:
                     fs_tasks.append(asyncio.ensure_future(
-                        self._run_rotate_timeline(src, clock, "a10")))
+                        self._run_rotate_timeline(src, clock, "a10",
+                                                  hold_tail=duration_ms)))
                     graph_segs += self._graph_add_track(ttype, src, clock)
             elif ttype == TRACK_VIBRATION and src.actions:
                 had_vibration = True
                 fs_tasks.append(asyncio.ensure_future(
-                    self._run_vibration(src, clock)))
+                    self._run_vibration(src, clock, hold_tail=duration_ms)))
                 graph_segs += self._graph_add_track(ttype, src, clock)
 
         completed = False
@@ -517,7 +535,15 @@ class _ScenarioPlayerChannelMixin:
             while not self._stop_requested and self._jump is None:
                 if self._winding_down:
                     break   # スクリプトは即時中断(ユーザー決定)
-                if clock.now_ms() >= duration_ms:
+                now = clock.now_ms()
+                if is_primary:
+                    # =377: 再生タブ左上の経過時間(従来はスクリプト専用 ch では
+                    # 更新されず 00:00.0 のままだった)。進み具合表示なら ch の
+                    # 経過、そうでなければアイテム内の経過。全長で頭打ち
+                    el = (self._seek_progress_base_ms + now) if progress else now
+                    self.state["elapsed_ms"] = int(
+                        min(el, self.state.get("duration_ms") or el))
+                if now >= duration_ms:
                     completed = True
                     break
                 await asyncio.sleep(0.03)
@@ -530,25 +556,15 @@ class _ScenarioPlayerChannelMixin:
                     await t
                 except asyncio.CancelledError:
                     pass
-            # 実行した種別の動作を止めておく(音声アイテムと同じ後始末)
-            if had_rotate and not self._stop_requested:
-                try:
-                    await self.intiface.send_rotate(50)
-                    self.state["rotate_pos"] = 50
-                except Exception:
-                    pass
-            if had_rotate_a10 and not self._stop_requested:
-                try:
-                    await self.intiface.send_rotate_a10(50)
-                    self.state["rotate_a10_pos"] = 50
-                except Exception:
-                    pass
-            if had_vibration and not self._stop_requested:
-                try:
-                    await self.intiface.send_vibration(0)
-                    self.state["vibration_pos"] = 0
-                except Exception:
-                    pass
+            # 実行した種別の動作を止めておく。=378: すぐには送らず
+            # STOP_GRACE_MS だけ保留し、その間に次のスクリプトのみアイテム
+            # (同じチャンネルの次の1本・次のステート/イベント)が同じ
+            # デバイスを使い始めたら送らない(切り替わりのたびに止まらない)
+            if not self._stop_requested:
+                self._ds_defer(
+                    (["ufo"] if had_rotate else [])
+                    + (["a10"] if had_rotate_a10 else [])
+                    + (["vib"] if had_vibration else []))
 
         # 最後まで流れた場合のみ on_complete を発火(ワインドダウンでの
         # 即時中断・停止・ジャンプでは発火しない=「流れ切った」セマンティクス)

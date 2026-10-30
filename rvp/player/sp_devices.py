@@ -6,11 +6,26 @@ import bisect
 import time
 from ..funscript import Funscript
 from ..rotate_source import RotateTimeline, load_rotate_source
-from ..scenario import TRACK_ROTATE_A10
+from ..scenario import (TRACK_LINEAR, TRACK_ROTATE, TRACK_ROTATE_A10,
+    TRACK_TWIST, TRACK_VIBRATION)
 from ..i18n import tr
 
 from .clock import PlaybackClock
 from .common import logger
+
+
+# =378: トラック種別 → 停止の猶予で使うレーン名。猶予付きで止めるのは
+# ufo / a10 / vib の3つ。linear / twist は「使っている」印(claim)だけに使う
+# (イベント終了の全停止 stop_all を、次のノードが linear を動かすなら送らない)。
+_DS_LANE = {TRACK_ROTATE: "ufo", TRACK_ROTATE_A10: "a10",
+            TRACK_VIBRATION: "vib", TRACK_LINEAR: "linear",
+            TRACK_TWIST: "twist"}
+_DS_STOP_LANES = ("ufo", "a10", "vib")
+
+
+def ds_lanes(types) -> set:
+    """トラック種別の集まり → レーン名の集合(=378)。"""
+    return {_DS_LANE[t] for t in types if t in _DS_LANE}
 
 
 class _ScenarioPlayerDevicesMixin:
@@ -284,13 +299,18 @@ class _ScenarioPlayerDevicesMixin:
         return 50 + off if cw else 50 - off
 
     async def _run_rotate_timeline(self, timeline: RotateTimeline,
-                                   clock: PlaybackClock, lane: str) -> None:
+                                   clock: PlaybackClock, lane: str,
+                                   hold_tail: float | None = None) -> None:
         """RotateTimeline(funscript/CSV)を実行する。
 
         lane: "ufo" / "a10"。funscript由来(1ch)は従来の pos 送信API
         (send_rotate/send_rotate_a10)を使い、モック互換と整数精度を保つ。
         CSV由来は send_rotate_lane でロータ個別・float精度で送出する
         (ufotwの2ロータ独立=タイプB対応)。
+
+        hold_tail(=378・スクリプトのみアイテムの長さ ms): アイテムの終わり
+        ちょうど(以降)にある最後の行(多くは停止の行)は送らない。止めるかどうかはアイテムの
+        後始末(停止の猶予)が決める=次のスクリプトが続けば止めない。
         """
         lane_ufo = (lane != "a10")
         offset_key = "rotate" if lane_ufo else TRACK_ROTATE_A10
@@ -321,6 +341,8 @@ class _ScenarioPlayerDevicesMixin:
         stop_vals = tuple((True, 0.0) for _ in range(timeline.channels))
         if n == 0:
             return
+        tail_idx = (n - 1 if hold_tail is not None and n > 1
+                    and steps[-1].at >= hold_tail else None)
 
         while True:
             if clock.paused:
@@ -367,6 +389,8 @@ class _ScenarioPlayerDevicesMixin:
             if idx >= n:
                 break
 
+            if last_sent != idx and idx == tail_idx:
+                last_sent = idx          # =378: 終わりちょうどの行は送らない
             if last_sent != idx:
                 vals = steps[idx].vals
                 try:
@@ -380,15 +404,18 @@ class _ScenarioPlayerDevicesMixin:
 
             await asyncio.sleep(0.01)
 
-    async def _run_vibration(self, funscript: Funscript, clock: PlaybackClock) -> None:
+    async def _run_vibration(self, funscript: Funscript, clock: PlaybackClock,
+                             hold_tail: float | None = None) -> None:
         """vibration用funscript実行。pos=0停止/100最大振動。
 
         rotateと同じステップ方式: 各区間の開始アクションのposを
-        その区間中ずっと維持する。
+        その区間中ずっと維持する。hold_tail は _run_rotate_timeline と同じ(=378)。
         """
         actions = funscript.actions
         ats = [a.at for a in actions]
         n = len(actions)
+        tail_idx = (n - 1 if hold_tail is not None and n > 1
+                    and actions[-1].at >= hold_tail else None)
         last_sent = None
         was_paused = False
 
@@ -427,6 +454,8 @@ class _ScenarioPlayerDevicesMixin:
             if idx >= n:
                 break
 
+            if last_sent != idx and idx == tail_idx:
+                last_sent = idx          # =378: 終わりちょうどの点は送らない
             if last_sent != idx:
                 pos = actions[idx].pos
                 try:
@@ -438,3 +467,149 @@ class _ScenarioPlayerDevicesMixin:
                 last_sent = idx
 
             await asyncio.sleep(0.01)
+
+    # ------------------------------------------------------------------
+    # =378 停止の猶予(スクリプトのみアイテムの切り替わりで止めない)
+    #
+    # 従来はスクリプトのみアイテムが終わるたび(=ランダムで次の1本へ移る
+    # たび・ステートの切り替わり)に rotate/vibration へ停止を送り、イベント
+    # の終わりには stop_all を送っていた。短い CSV を続けて流すと、その
+    # たびに UFO が一瞬止まる(ユーザー報告・漫画連動)。
+    # スクリプトのみアイテムの終わりでは停止を STOP_GRACE_MS だけ保留し、
+    # その間に次のスクリプトのみアイテムが同じレーンを使い始めたら取り消す。
+    # 音声・動画のアイテムは従来どおり(終わりで即停止。始まるときは保留中の
+    # 停止を先に送る=音声の切り替わりでは止まる)。
+    # 状態(_ds_*)は ScenarioPlayer.__init__ が持つ(mixin は状態を持たない)。
+    # ------------------------------------------------------------------
+    def _ds_now(self) -> float:
+        return time.monotonic()
+
+    def _ds_reset(self) -> None:
+        """保留をすべて捨てる(停止・一時停止・ジャンプ・再生開始)。"""
+        self._ds_pending = {}
+        self._ds_all = None
+        self._ds_claimed = set()
+        task, self._ds_task = self._ds_task, None
+        if task is not None and not task.done() \
+                and task is not _current_task():
+            task.cancel()
+
+    def _ds_defer(self, lanes) -> None:
+        """スクリプトのみアイテムの終わり: lanes の停止を猶予付きで保留する。"""
+        if self._stop_requested:
+            return
+        due = self._ds_now() + self.STOP_GRACE_MS / 1000.0
+        for ln in lanes:
+            if ln in _DS_STOP_LANES:
+                self._ds_pending[ln] = due
+                self._ds_claimed.discard(ln)
+        self._ds_kick()
+
+    def _ds_defer_all(self) -> None:
+        """イベントの終わり: 全停止(stop_all)を猶予付きで保留する。
+
+        猶予の間に次のノードが使い始めたレーン(claim)は止めない。誰も
+        使い始めなければ従来どおり stop_all。
+        """
+        if self._stop_requested:
+            return
+        self._ds_all = self._ds_now() + self.STOP_GRACE_MS / 1000.0
+        self._ds_claimed = set()
+        self._ds_kick()
+
+    def _ds_claim(self, lanes) -> None:
+        """スクリプトのみアイテムの始まり: 保留中の停止を取り消す(送らない)。"""
+        for ln in lanes:
+            self._ds_pending.pop(ln, None)
+            self._ds_claimed.add(ln)
+
+    async def _ds_flush(self, lanes) -> None:
+        """音声・動画アイテムの始まり: そのアイテムが動かすレーンの保留中の
+        停止を**いま**送る(音声の切り替わりでは止める=従来の動き)。"""
+        for ln in lanes:
+            send = self._ds_pending.pop(ln, None) is not None
+            if (self._ds_all is not None and ln in _DS_STOP_LANES
+                    and ln not in self._ds_claimed):
+                send = True
+            if ln in _DS_STOP_LANES and send:
+                await self._ds_send_stop(ln)
+            self._ds_claimed.add(ln)
+
+    def _ds_drop(self, lanes) -> None:
+        """いま停止を送った(インターバル)レーンの保留を外す。"""
+        for ln in lanes:
+            self._ds_pending.pop(ln, None)
+
+    def _ds_kick(self) -> None:
+        if self._ds_task is None or self._ds_task.done():
+            try:
+                self._ds_task = asyncio.ensure_future(self._ds_loop())
+            except RuntimeError:
+                # イベントループの外(テストの同期呼び出し等)。保留は残る
+                self._ds_task = None
+
+    async def _ds_loop(self) -> None:
+        try:
+            while self._ds_pending or self._ds_all is not None:
+                due = list(self._ds_pending.values())
+                if self._ds_all is not None:
+                    due.append(self._ds_all)
+                wait = min(due) - self._ds_now()
+                if wait > 0:
+                    await asyncio.sleep(min(wait, 0.05))
+                    continue
+                await self._ds_fire_due()
+        finally:
+            if self._ds_task is _current_task():
+                self._ds_task = None
+
+    async def _ds_fire_due(self) -> None:
+        now = self._ds_now()
+        if self._stop_requested or self._paused:
+            # 停止・一時停止は stop_all を自分で送っている
+            self._ds_pending = {}
+            self._ds_all = None
+            self._ds_claimed = set()
+            return
+        for ln, t in list(self._ds_pending.items()):
+            if t <= now:
+                del self._ds_pending[ln]
+                await self._ds_send_stop(ln)
+        if self._ds_all is not None and self._ds_all <= now:
+            self._ds_all = None
+            claimed, self._ds_claimed = self._ds_claimed, set()
+            if not claimed:
+                try:
+                    await self.intiface.stop_all()
+                except Exception:
+                    pass
+                self._ds_pending = {}
+                self.state["rotate_pos"] = 50
+                self.state["rotate_a10_pos"] = 50
+                self.state["vibration_pos"] = 0
+            else:
+                for ln in _DS_STOP_LANES:
+                    if ln not in claimed:
+                        self._ds_pending.pop(ln, None)
+                        await self._ds_send_stop(ln)
+
+    async def _ds_send_stop(self, lane: str) -> None:
+        try:
+            if lane == "ufo":
+                await self.intiface.send_rotate(50)
+                self.state["rotate_pos"] = 50
+            elif lane == "a10":
+                await self.intiface.send_rotate_a10(50)
+                self.state["rotate_a10_pos"] = 50
+            elif lane == "vib":
+                await self.intiface.send_vibration(0)
+                self.state["vibration_pos"] = 0
+        except Exception:
+            pass
+
+
+def _current_task():
+    try:
+        return asyncio.current_task()
+    except RuntimeError:
+        return None

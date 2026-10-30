@@ -596,6 +596,19 @@ class ScenarioEditor(_ScenarioEditorMapMixin, _ScenarioEditorMessagesMixin, _Sce
         if getattr(row, "is_video", False) and _pkg()._mpv_path_setting() is None:
             self._mpv_missing_popup()
             return None
+        # =380: メイン画面の「スクリプト編集」(単独の編集画面 A)が開いていれば、
+        # 未保存の確認(保存する/破棄する/やめる)のうえで閉じてから開く
+        # (1窓・後勝ち=Q5)。「やめる」なら A のまま何もしない。
+        host = self.review_host
+        sd = getattr(host, "_script_dlg", None) if host is not None else None
+        try:
+            if sd is not None and sd.winfo_exists():
+                if not sd.close():
+                    sd.front()
+                    return None
+                host._script_dlg = None
+        except Exception:
+            pass
         spec = row.review_spec()
         dlg = self._review_dlg
         if dlg is not None:

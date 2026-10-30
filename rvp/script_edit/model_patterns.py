@@ -229,6 +229,64 @@ class _ScriptEditModelPatternsMixin:
         self.pattern_selection = set()
         return "ok"
 
+    def hold_write(self, lo: int, hi: int, new_pts, lo_inclusive: bool = False,
+                   token=None):
+        """=379: Fキー「押している間だけ」の書き込み(区間の上書き)。
+
+        区間 (lo, hi](lo_inclusive なら [lo, hi])を明け渡して new_pts を
+        **普通の点**(パターンにしない=青)として置く。明け渡しは
+        place_point_over と同じ規則: 区間(端の禁止帯 edge_tol を含む)に
+        掛かるパターンは**丸ごと削除**(ユーザー決定 Q4)、区間内の普通の
+        点は消す。区間より後ろの点は触らない(ユーザー決定 Q2)。
+
+        UNDO: 押しっぱなし1回=1ステップ(ユーザー決定 Q6)。token は前回の
+        戻り値(このセッションが積んだ UNDO の印)。UNDO の先頭が token の
+        ままなら積み直さない。途中で UNDO や別の編集が挟まったら、次に
+        変化があった時点で新しく積む。変化が無ければ何もしない。
+        戻り値は新しい token(積んでいなければ引数のまま)。"""
+        lo, hi = int(lo), int(hi)
+        tol = self.edge_tol
+        drop = set()
+        for i, rec in enumerate(self.patterns):
+            if not rec["ats"]:
+                continue
+            plo, phi = rec["ats"][0], rec["ats"][-1]
+            if plo <= hi + tol and phi >= lo - tol:
+                drop.add(i)
+        survivors = [rec for i, rec in enumerate(self.patterns)
+                     if i not in drop]
+        surv_ats = set()
+        for rec in survivors:
+            surv_ats.update(rec["ats"])
+        pts = dict(self.points)
+        for i in drop:
+            for a in self.patterns[i]["owned"]:
+                if a not in surv_ats:
+                    pts.pop(a, None)
+        for a in list(pts):
+            inside = (lo <= a <= hi) if lo_inclusive else (lo < a <= hi)
+            if inside and a not in surv_ats:
+                del pts[a]
+        for a, p in new_pts:
+            a = int(a)
+            if a < 0:
+                continue
+            pts[a] = max(0, min(self.pos_max, int(p)))
+        new_sorted = sorted(pts.items())
+        if not drop and new_sorted == list(self.points):
+            return token                    # 変化なし(UNDO を積まない)
+        if token is None or not self._undo or self._undo[-1] is not token:
+            self._push()
+            token = self._undo[-1]
+        else:
+            self.dirty = True
+        removed = {a for a, _p in self.points} - set(pts)
+        self.patterns = survivors
+        self.points = new_sorted
+        self.selection -= removed
+        self.pattern_selection = set()      # index が変わり得るため
+        return token
+
     def place_pattern(self, plan: dict, name) -> bool:
         """パターンの新規配置。拒否は False(何も起きない=仕様 10b)。"""
         if plan is None:

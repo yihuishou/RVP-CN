@@ -32,13 +32,17 @@ def _clip_family_label(fam) -> str:
 
 class _FkChain:
     """=312: F キー長押しの数珠つなぎ(=222)の状態。打点先(左/右)ごとに1つ。"""
-    __slots__ = ("held", "chain_end", "job", "release_job")
+    __slots__ = ("held", "chain_end", "job", "release_job", "hold",
+                 "release_at")
 
     def __init__(self):
         self.held = None          # 押しっぱなし中の F キー
         self.chain_end = None     # 次に置く起点(直前パターンの終端)
-        self.job = None           # 終端監視の after id
+        self.job = None           # 終端監視の after id(=379 は書き込みの tick)
         self.release_job = None   # KeyRelease の確定待ち(自動リピート)
+        self.hold = None          # =379: 「押している間だけ」の HoldSession
+        self.release_at = None    # =379: 離した瞬間の素材時刻(確定待ちの間)
+
 
 class _NumHold:
     """=336: 数字キー押しっぱなしの状態。打点先(左/右)ごとに1つ。
@@ -127,7 +131,9 @@ class _ItemReviewEditMixin:
             self._edit_new = False
         else:
             values = [tr("(新規作成)")]
-            self.edit_type_menu.pack(side="left", padx=(6, 0))
+            # =380: 「＋新規」の直後へ(右の D&D の案内より左に置く)
+            self.edit_type_menu.pack(side="left", padx=(6, 0),
+                                     after=self.edit_new_btn)
             self._edit_new = True
         self.edit_track_menu.configure(values=values)
         self.edit_track_var.set(values[0])
@@ -329,6 +335,10 @@ class _ItemReviewEditMixin:
         else:
             self.edit_csv_hint.pack_forget()
         self._csv_pat_warned = False
+        # =379: Fキーの配置モードの出し入れ(回転・振動のときだけ)。
+        # =380: 新規作成で種別コンボを替えたとき(_on_edit_type_change)にも
+        # 効くよう、_edit_load_track からここへ移した(=379 の取りこぼし)
+        self._refresh_fk_mode_ui()
 
     def _set_edit_pair(self, on: bool):
         """=232: 左右2本の同時編集を出し入れする(5列csv のときだけ ON)。"""
@@ -365,6 +375,7 @@ class _ItemReviewEditMixin:
             elif not on and seg.winfo_ismapped():
                 seg.pack_forget()
                 lbl.pack_forget()
+        self._refresh_fk_mode_ui()           # =379: 並びを打点モードに合わせる
         # =311/=312: 案内文とバッジ(F1左 F5右)を表示に合わせる
         self._refresh_key_hint(on)
         if getattr(self, "edit_fkey_hint", None) is not None:
@@ -458,7 +469,14 @@ class _ItemReviewEditMixin:
             command=self._on_edit_new_track)
         self.edit_new_btn.pack(side="left", padx=(6, 0))
         Tooltip(self.edit_new_btn,
-                lambda: tr("このアイテムへ別の種別のトラックを新しく作る"))
+                lambda: tr("別の種別のスクリプトを新しく作る")   # =380: 単独起動
+                if getattr(self, "_standalone", False)
+                else tr("このアイテムへ別の種別のトラックを新しく作る"))
+        # =380: D&D できることの案内(Q16。「＋新規」(新規作成なら種別コンボ)の
+        # 右。D&D が使える環境でだけ出す=_refresh_dnd_hint)
+        self.edit_dnd_hint = ctk.CTkLabel(
+            row1, text="", font=ctk.CTkFont(size=11), text_color=MUTED,
+            anchor="w")
         # 新規作成のときだけ出す種別コンボ
         # (=224: funscript の linear/twist に加えて csv(ROTATE 3列/5列))
         self.edit_type_var = tk.StringVar(value="linear")
@@ -476,6 +494,7 @@ class _ItemReviewEditMixin:
             text_color=("gray20", "gray85"),
             hover_color=("gray85", "gray25"), command=self._edit_save_as)
         self.edit_saveas_btn.pack(side="right")
+        self._refresh_dnd_hint()          # =380
         self.edit_save_btn = ctk.CTkButton(
             row1, text=tr("保存"), width=76, height=26,
             font=ctk.CTkFont(size=12), fg_color=_clr.ACCENT,
@@ -891,6 +910,43 @@ class _ItemReviewEditMixin:
                            "左1-9/右1-9(テンキー): 数字行=左・テンキー=右、1〜9=速度-70〜+70（5=停止）\n"
                            "左1-4/右6-9: 1〜4=左・6〜9=右、速度-70/-40/+40/+70"
                            "（5・0・+は無効。テンキーも同じ）"))
+        # =379: Fキーの配置モード「丸ごと配置/押している間だけ」と、
+        # 「押している間だけ」のときの開始位置「先頭から/ランダム」。
+        # linear/twist 以外(回転・振動)のときだけ出す。置き場所は UFOTW
+        # (左右2本)なら数字キーの打点モードの右、それ以外は「サブ」の右
+        # (ユーザー決定)。Ctrl+H / Ctrl+R でも切り替わる(Q7/Q16)。
+        self._fk_mode = self.load_fk_mode()
+        self._fk_start = self.load_fk_start()
+        self.edit_fk_mode_label = ctk.CTkLabel(
+            sub_row, text=tr("Fキーの配置モード"), font=ctk.CTkFont(size=11),
+            text_color=TEXT_MUTED)
+        self.edit_fk_mode_seg = ctk.CTkSegmentedButton(
+            sub_row, values=[self._fk_mode_label("whole"),
+                             self._fk_mode_label("hold")],
+            height=24, font=ctk.CTkFont(size=11),
+            command=self._on_fk_mode_seg)
+        self.edit_fk_mode_seg.set(self._fk_mode_label(self._fk_mode))
+        for _b in getattr(self.edit_fk_mode_seg, "_buttons_dict", {}).values():
+            Tooltip(_b,
+                lambda: tr("Fキーの配置モード（Ctrl+H で切り替え）\n"
+                           "丸ごと配置: 押した位置からパターンを最後まで置きます（パターン=緑）\n"
+                           "押している間だけ: 再生中、押している間だけパターンの動きを書き込み、"
+                           "離した位置で停止を打ちます（普通の点=青）。停止中は丸ごと配置"))
+        self.edit_fk_start_label = ctk.CTkLabel(
+            sub_row, text=tr("開始位置"), font=ctk.CTkFont(size=11),
+            text_color=TEXT_MUTED)
+        self.edit_fk_start_seg = ctk.CTkSegmentedButton(
+            sub_row, values=[self._fk_start_label("head"),
+                             self._fk_start_label("random")],
+            height=24, font=ctk.CTkFont(size=11),
+            command=self._on_fk_start_seg)
+        self.edit_fk_start_seg.set(self._fk_start_label(self._fk_start))
+        for _b in getattr(self.edit_fk_start_seg, "_buttons_dict", {}).values():
+            Tooltip(_b,
+                lambda: tr("押している間だけ配置するときの開始位置（Ctrl+R で切り替え）\n"
+                           "先頭から: パターンの0秒から\n"
+                           "ランダム: パターンの途中（0.1秒刻み）からランダムに引用。"
+                           "押し続けて2本目以降は0秒から"))
         # 保存結果・エラーの表示欄(モーダルにしない)
         self.edit_msg = ctk.CTkLabel(
             inner, text="", font=ctk.CTkFont(size=11), anchor="w",
@@ -898,6 +954,10 @@ class _ItemReviewEditMixin:
         self.edit_msg.pack(fill="x", pady=(2, 0))
         for seq in ("<Control-m>", "<Control-M>"):
             self.bind(seq, lambda _e: self._toggle_num_mode(), add="+")
+        for seq in ("<Control-h>", "<Control-H>"):            # =379
+            self.bind(seq, lambda _e: self._toggle_fk_mode(), add="+")
+        for seq in ("<Control-r>", "<Control-R>"):            # =379
+            self.bind(seq, lambda _e: self._toggle_fk_start(), add="+")
 
     def _refresh_key_hint(self, pair=None):
         """=337: 案内文を表示(左右2本か・回転か・9速/4速)に合わせる。"""
@@ -956,6 +1016,132 @@ class _ItemReviewEditMixin:
         if not self.edit_mode or not self._edit_built or not self._edit_pair:
             return None
         self._set_num_mode("4" if self._num_mode == "9" else "9")
+        return "break"
+
+    # ---- =379: Fキーの配置モード・開始位置 ----
+    FK_MODES = ("whole", "hold")
+    FK_STARTS = ("head", "random")
+
+    @classmethod
+    def load_fk_mode(cls, cfg=None) -> str:
+        """記憶した Fキーの配置モード("whole"/"hold")。無い/不正なら "whole"。"""
+        try:
+            cfg = load_config() if cfg is None else cfg
+            v = str(cfg.get(cls.CFG_FK_MODE, "whole"))
+        except Exception:
+            v = "whole"
+        return v if v in cls.FK_MODES else "whole"
+
+    @classmethod
+    def load_fk_start(cls, cfg=None) -> str:
+        """記憶した開始位置("head"/"random")。無い/不正なら "head"。"""
+        try:
+            cfg = load_config() if cfg is None else cfg
+            v = str(cfg.get(cls.CFG_FK_START, "head"))
+        except Exception:
+            v = "head"
+        return v if v in cls.FK_STARTS else "head"
+
+    @staticmethod
+    def _fk_mode_label(mode: str) -> str:
+        return tr("押している間だけ") if mode == "hold" else tr("丸ごと配置")
+
+    @staticmethod
+    def _fk_start_label(start: str) -> str:
+        return tr("ランダム") if start == "random" else tr("先頭から")
+
+    def _fk_mode_applicable(self) -> bool:
+        """このトラックで切り替えを出すか(linear/twist 以外=回転・振動)。"""
+        from .. import script_edit
+        if not self._edit_built or getattr(self, "_edit_type", None) is None:
+            return False
+        return self._pat_mode() in (script_edit.PAT_MODE_ROTATE,
+                                    script_edit.PAT_MODE_VIB)
+
+    def _refresh_fk_mode_ui(self):
+        """切り替えの出し入れと並び(=379)。UFOTW は数字キーの打点モードの
+        右、それ以外は「サブ」の右。開始位置は「押している間だけ」のときだけ。"""
+        seg = getattr(self, "edit_fk_mode_seg", None)
+        if seg is None:
+            return
+        lbl = self.edit_fk_mode_label
+        sseg, slbl = self.edit_fk_start_seg, self.edit_fk_start_label
+        for w in (sseg, slbl, seg, lbl):
+            if w.winfo_manager():
+                w.pack_forget()
+        if not self._fk_mode_applicable():
+            return
+        num = getattr(self, "edit_num_mode_seg", None)
+        anchor = num if (num is not None and num.winfo_manager()) \
+            else self.edit_sub_menu
+        lbl.pack(side="left", padx=(16, 0), after=anchor)
+        seg.pack(side="left", padx=(4, 0), after=lbl)
+        if self._fk_mode == "hold":
+            slbl.pack(side="left", padx=(16, 0), after=seg)
+            sseg.pack(side="left", padx=(4, 0), after=slbl)
+
+    def _fk_finish_holds(self):
+        """押しっぱなし中の「押している間だけ」を今の位置で締めて、数珠つなぎも
+        止める(モードの切り替え時)。"""
+        for i, c in enumerate(getattr(self, "_fk_chain", ())):
+            if c.hold is not None:
+                self._hold_finish(i)
+            if c.held is not None or c.job is not None:
+                self._chain_stop(i)
+
+    def _save_cfg_value(self, key: str, value: str):
+        try:
+            cfg = load_config()
+            if cfg.get(key) != value:
+                cfg[key] = value
+                save_config(cfg)
+        except Exception:
+            pass
+
+    def _set_fk_mode(self, mode: str, save: bool = True):
+        mode = "hold" if str(mode) == "hold" else "whole"
+        if mode != self._fk_mode:
+            self._fk_finish_holds()
+        self._fk_mode = mode
+        seg = getattr(self, "edit_fk_mode_seg", None)
+        if seg is not None and seg.get() != self._fk_mode_label(mode):
+            seg.set(self._fk_mode_label(mode))
+        self._refresh_fk_mode_ui()
+        if save:
+            self._save_cfg_value(self.CFG_FK_MODE, mode)
+
+    def _set_fk_start(self, start: str, save: bool = True):
+        start = "random" if str(start) == "random" else "head"
+        self._fk_start = start
+        seg = getattr(self, "edit_fk_start_seg", None)
+        if seg is not None and seg.get() != self._fk_start_label(start):
+            seg.set(self._fk_start_label(start))
+        if save:
+            self._save_cfg_value(self.CFG_FK_START, start)
+
+    def _on_fk_mode_seg(self, label: str):
+        self._set_fk_mode("hold" if label == self._fk_mode_label("hold")
+                          else "whole")
+
+    def _on_fk_start_seg(self, label: str):
+        self._set_fk_start("random" if label == self._fk_start_label("random")
+                           else "head")
+
+    def _toggle_fk_mode(self):
+        """Ctrl+H。回転・振動のトラックのときだけ効く(入力欄では何もしない
+        =Tk の Entry は Ctrl+H を1文字削除に使う)。"""
+        if not self.edit_mode or not self._fk_mode_applicable() or \
+                self._key_target_is_entry():
+            return None
+        self._set_fk_mode("whole" if self._fk_mode == "hold" else "hold")
+        return "break"
+
+    def _toggle_fk_start(self):
+        """Ctrl+R。「押している間だけ」が出ているときだけ効く。"""
+        if not self.edit_mode or not self._fk_mode_applicable() or \
+                self._fk_mode != "hold" or self._key_target_is_entry():
+            return None
+        self._set_fk_start("head" if self._fk_start == "random" else "random")
         return "break"
 
     @staticmethod
@@ -1203,12 +1389,14 @@ class _ItemReviewEditMixin:
             return
         self.edit_track_var.set(tr("(新規作成)"))
         if not self.edit_type_menu.winfo_ismapped():
-            self.edit_type_menu.pack(side="left", padx=(6, 0))
+            self.edit_type_menu.pack(side="left", padx=(6, 0),
+                                     after=self.edit_new_btn)   # =380
         self._edit_load_track(-1)
 
     def _on_edit_type_change(self):
         # 新規作成の種別変更(点列はそのまま。保存時の紐づけ先種別が変わる)
         # =224: csv/funscript の切り替えも起きるので画面の作法を作り直す
+        self._remember_standalone_kind()      # =380: 単独起動は種別を覚える
         self._edit_type, self._edit_kind, self._edit_cols = \
             self._new_kind_of(self.edit_type_var.get())
         self._edit_csv_ch = 0
@@ -1315,7 +1503,7 @@ class _ItemReviewEditMixin:
                             "一部のパターン情報を復元できませんでした"
                             "（点はそのまま残しています）"))
             region = (lo, hi, bool(lo) or hi is not None)
-        self._apply_edit_kind()
+        self._apply_edit_kind()             # =379: Fキーの配置モードもここで
         for _g in self.edit_graphs:                  # =232: 区間は全部へ
             _g.region = region
         self.edit_save_btn.configure(
@@ -1728,9 +1916,14 @@ class _ItemReviewEditMixin:
         (レビューを開いたまま編集画面でイベントを切り替えたケース)。
         """
         row = self._row
+        ttype = self._edit_type
+        # =380: 単独起動(メイン画面の「スクリプト編集」)は紐づけ先が無いのが
+        # 正常=案内を出さず、編集対象候補へ加えるだけ(Q10)
+        standalone = getattr(self, "_standalone", False)
         try:
-            if row is None or not row.winfo_exists() or \
-                    getattr(row, "audio_rel", None) != self._row_audio_rel:
+            if not standalone and (
+                    row is None or not row.winfo_exists() or
+                    getattr(row, "audio_rel", None) != self._row_audio_rel):
                 self.edit_msg.configure(
                     text=tr("アイテムの行が見つからないため、トラックへの"
                             "紐づけは行われませんでした"),
@@ -1738,9 +1931,10 @@ class _ItemReviewEditMixin:
                 return
         except Exception:
             return
-        ttype = self._edit_type
-        rel = _safe_relpath(path, row.base_dir)
         try:
+            if standalone:
+                raise LookupError     # 紐づけはしない(下の候補追加へ)
+            rel = _safe_relpath(path, row.base_dir)
             if row.mode == "auto":
                 # 手動モードへ切り替え(自動の解決結果を行として引き継ぐ)
                 row.mode_var.set(tr("手動"))
@@ -1756,6 +1950,8 @@ class _ItemReviewEditMixin:
             else:
                 row._add_track_row(ttype, rel)
             row._update_mode_ui()
+        except LookupError:
+            pass      # =380: 単独起動
         except Exception:
             pass      # 紐づけに失敗しても保存自体は成功している
         # 編集対象候補にも加えて、コンボから選び直せるようにする

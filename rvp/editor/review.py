@@ -13,6 +13,7 @@ from ..rotate_source import load_rotate_source
 from .common import (BOX_BG, BOX_BORDER, CTkOptionMenu, MSG_WARN, MUTED,
     TEXT_MUTED, _front_window, _place_popup)
 from .fields import Tooltip
+from .review_dnd import _ItemReviewDndMixin
 from .review_edit import _ItemReviewEditMixin
 from .review_patterns import _ItemReviewPatternsMixin
 from .review_playback import _ItemReviewPlaybackMixin
@@ -21,7 +22,7 @@ from .review_support import (REVIEW_ROTATE_TYPES, REVIEW_SLOT, SPEED_CHOICES,
 from . import common as _clr   # =301: テーマ追従する色定数は定義元を参照
 
 
-class ItemReviewDialog(_ItemReviewPlaybackMixin, _ItemReviewEditMixin, _ItemReviewPatternsMixin, ctk.CTkToplevel):
+class ItemReviewDialog(_ItemReviewPlaybackMixin, _ItemReviewEditMixin, _ItemReviewPatternsMixin, _ItemReviewDndMixin, ctk.CTkToplevel):
     """アイテムレビュー画面(=164)。非モーダル・同時に1つまで。
 
     編集画面(ScenarioEditor.open_item_review)から開く。中身の差し替えは
@@ -55,8 +56,13 @@ class ItemReviewDialog(_ItemReviewPlaybackMixin, _ItemReviewEditMixin, _ItemRevi
     # (画像+内部余白)ため、文字だけの未登録U枠・edit も同じ幅に揃える
     PAT_BTN_W = 54
 
-    def __init__(self, master, spec: dict, host=None, owner=None, row=None):
+    def __init__(self, master, spec: dict, host=None, owner=None, row=None,
+                 standalone: bool = False):
         super().__init__(master)
+        # =380: standalone=メイン画面の「スクリプト編集」から開いた単独の
+        # 編集画面(シナリオ・アイテムに紐づかない。レビューを経ず編集モード)
+        self._standalone = bool(standalone)
+        self._dnd_ok = False
         # host: 本編を止めて初期音量をもらうための相手(main.RVPApp)。None可。
         self.host = host
         # =170: owner=ScenarioEditor(上書き警告の走査・保存先の既定に使う)。
@@ -136,7 +142,10 @@ class ItemReviewDialog(_ItemReviewPlaybackMixin, _ItemReviewEditMixin, _ItemRevi
         self.protocol("WM_DELETE_WINDOW", self.close)
         # 編集画面を閉じるなど、こちらを経由せず破棄されても音を止める
         self.bind("<Destroy>", self._on_destroy)
+        self._setup_dnd()                 # =380: funscript/csv(・音声・動画)の D&D
         self.load(spec)
+        if self._standalone:
+            self._start_standalone()      # =380: 最初から編集モードの新規作成
         _front_window(self)
 
     # =232: いま触っているモデル / グラフ(左右同時編集の入口)
@@ -377,7 +386,8 @@ class ItemReviewDialog(_ItemReviewPlaybackMixin, _ItemReviewEditMixin, _ItemRevi
         warn = list(self.spec.get("warn") or [])
         # =252: デバイス連動OFFのアイテムは音声試聴のみ(AQ7)。
         # スクリプト編集への導線を隠す(tracksは空で渡ってくる)。
-        if self.spec.get("device_off"):
+        if self.spec.get("device_off") or self._standalone:
+            # =380: 単独起動は「レビューに戻る」を出さない(戻る先が無い)
             self.edit_btn.pack_forget()
         elif not self.edit_btn.winfo_manager():
             self.edit_btn.pack(side="left")
@@ -757,11 +767,11 @@ class ItemReviewDialog(_ItemReviewPlaybackMixin, _ItemReviewEditMixin, _ItemRevi
         except Exception:
             pass
 
-    def close(self):
+    def close(self) -> bool:
         # =170: 未保存の編集がある状態で閉じるときは確認を出す(仕様 14b)。
-        # 「やめる」なら閉じない。
+        # 「やめる」なら閉じない。=380: 閉じたら True(A↔B の後勝ちで使う)
         if self.edit_mode and not self._resolve_unsaved():
-            return
+            return False
         self._save_edit_height()          # =211
         try:
             self.winmem.save_now()        # =181 の記憶(閉じる直前の配置)
@@ -770,6 +780,7 @@ class ItemReviewDialog(_ItemReviewPlaybackMixin, _ItemReviewEditMixin, _ItemRevi
         self._cancel_tick()
         self._stop_audio()
         self.destroy()
+        return True
 
     # =242: 0.01秒刻み・0.00〜-1.00。config("time_adjust_sec")へ保存する。
     CFG_TIME_ADJ = "time_adjust_sec"
@@ -778,6 +789,12 @@ class ItemReviewDialog(_ItemReviewPlaybackMixin, _ItemReviewEditMixin, _ItemRevi
     # 1〜9=9 段階)/ "4"=4速(1〜4=左・6〜9=右・-70/-40/+40/+70。テンキーも同じ)。
     # config("edit_num_mode")へ保存し、再起動後も引き継ぐ(ユーザー決定)。
     CFG_NUM_MODE = "edit_num_mode"
+
+    # =379: Fキーの配置モード("whole"=丸ごと配置 / "hold"=押している間だけ)と
+    # 「押している間だけ」の開始位置("head"=先頭から / "random"=ランダム)。
+    # どちらも config へ保存し、ufo/vibration 等で共通(ユーザー決定 Q7/Q16)。
+    CFG_FK_MODE = "edit_fkey_mode"
+    CFG_FK_START = "edit_fkey_start"
 
     TIME_ADJ_REPEAT_FIRST = 400     # 長押しの初回ディレイ(ms)
 

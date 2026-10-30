@@ -197,6 +197,31 @@ class _ScriptEditModelClipboardMixin:
         first_pos = first_pos + voff if first_pos is not None else None
         return self._overwrite_place(base, end, new_pts, new_pats, first_pos)
 
+    def pattern_plan(self, shape, at0: float, base_pos: float | None,
+                     grid_at: int, grid_pos: int, scale: float = 1.0):
+        """Fキー配置の点の計画(place_pattern_over から =379 で抽出)。
+        at0 を左端(グリッドへ吸着)にした plan_normal の結果。置けない形は
+        None。=379 の「押している間だけ」は at0=0 で相対の点列を得る。"""
+        if not shape or len(shape) < 2:
+            return None
+        shape = scale_shape(shape, self.pos_max)   # =297: 0〜100 定義→分解能
+        if abs(scale - 1.0) > 1e-9:
+            shape = tuple((t * scale, p) for t, p in shape)
+        p0 = shape[0][1]
+        plast = shape[-1][1]
+        if base_pos is None:
+            off = 0
+        else:
+            pmin = min(p for _t, p in shape)
+            pmax = max(p for _t, p in shape)
+            target = max(0, min(self.pos_max, base_pos))
+            off = max(-pmin, min(self.pos_max - pmax, target - p0))
+        A = snap(max(0.0, at0), grid_at)
+        return plan_normal(shape, A, grid_at, grid_pos,
+                           b0=p0 + off, b1=plast + off,
+                           round_interior=self.round_interior,
+                           pos_max=self.pos_max)
+
     def place_pattern_over(self, shape, at0: float, base_pos: float | None,
                            grid_at: int, grid_pos: int, name,
                            scale: float = 1.0) -> str:
@@ -212,25 +237,8 @@ class _ScriptEditModelClipboardMixin:
         # =222: 失敗した回の値が残らないよう、毎回まず消す(数珠つなぎは
         # 「置けた区間」だけを次の起点にする)
         self.last_place_range = None
-        if not shape or len(shape) < 2:
-            return "grid"
-        shape = scale_shape(shape, self.pos_max)   # =297: 0〜100 定義→分解能
-        if abs(scale - 1.0) > 1e-9:
-            shape = tuple((t * scale, p) for t, p in shape)
-        p0 = shape[0][1]
-        plast = shape[-1][1]
-        if base_pos is None:
-            off = 0
-        else:
-            pmin = min(p for _t, p in shape)
-            pmax = max(p for _t, p in shape)
-            target = max(0, min(self.pos_max, base_pos))
-            off = max(-pmin, min(self.pos_max - pmax, target - p0))
-        A = snap(max(0.0, at0), grid_at)
-        plan = plan_normal(shape, A, grid_at, grid_pos,
-                           b0=p0 + off, b1=plast + off,
-                           round_interior=self.round_interior,
-                           pos_max=self.pos_max)
+        plan = self.pattern_plan(shape, at0, base_pos, grid_at, grid_pos,
+                                 scale)
         if plan is None:
             return "grid"
         pts = plan["points"]

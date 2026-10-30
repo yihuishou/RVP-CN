@@ -328,3 +328,79 @@ def _review_segments(ttype: str, src) -> list:
         return [seg(base, "step", _SP._graph_points_rotate(src, 0),
                     GRAPH_PRE_ROTATE)]
     return []
+
+
+# =380: スクリプト編集画面への D&D・単独起動(メイン画面の「スクリプト編集」)
+# 受け付ける拡張子(シナリオ編集画面の D&D と同じ。動画は VIDEO_EXTS)
+SCRIPT_DROP_EXTS = (".funscript", ".csv")
+AUDIO_DROP_EXTS = (".wav", ".mp3")
+
+
+def script_type_from_name(path: str) -> str:
+    """=380: ファイル名のタグ(大文字小文字無視)からトラック種別を決める。
+
+    タグはシナリオの自動紐づけと同じ(twist / ufo / a10 / vib)。複数含む
+    ときは**ファイル名の中で最後に現れるタグ**を採る(タグは末尾に付ける
+    ことが多いため。ユーザー決定 Q7)。
+      - .csv は回転のみ: 最後の回転タグが a10 なら rotate_a10cyclonesa、
+        それ以外(タグなし・ufo・他のタグ)は rotate_ufo。3列/5列は中身で決める
+      - .funscript: タグなしは linear
+    """
+    import os
+    from ..scenario.tracks import AUTO_FS_TAGS, CSV_TRACK_TYPES
+    stem = os.path.splitext(os.path.basename(str(path)))[0].casefold()
+    csv = _is_csv(path)
+
+    def last_tag(types):
+        best, pos = None, -1
+        for t in types:
+            i = stem.rfind(AUTO_FS_TAGS[t])
+            if i > pos:
+                best, pos = t, i
+        return best
+
+    if csv:
+        t = last_tag([t for t in AUTO_FS_TAGS if t in CSV_TRACK_TYPES])
+        return t or "rotate_ufo"
+    return last_tag(list(AUTO_FS_TAGS)) or "linear"
+
+
+def find_media_for_script(script_path: str, prefer_video: bool = True):
+    """=380: スクリプトと同じフォルダから対応する音声・動画を探す(自動紐づけの
+    逆: 音声/動画のファイル名(拡張子なし)がスクリプト名に含まれるもの)。
+    候補が複数なら名前の長い(=より具体的な)もの→短い名前→辞書順。
+    prefer_video=True なら動画を優先(ユーザー決定 Q13。mpv が無ければ
+    呼び出し側が False で呼ぶ)。見つからなければ None。"""
+    import os
+    from .common import VIDEO_EXTS
+    folder = os.path.dirname(os.path.abspath(script_path))
+    stem = os.path.splitext(os.path.basename(script_path))[0].casefold()
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return None
+    audio, video = [], []
+    for n in names:
+        base, ext = os.path.splitext(n)
+        ext = ext.lower()
+        b = base.casefold()
+        if not b or b not in stem:
+            continue
+        if ext in AUDIO_DROP_EXTS:
+            audio.append(n)
+        elif ext in VIDEO_EXTS:
+            video.append(n)
+
+    def pick(lst):
+        if not lst:
+            return None
+        lst = sorted(lst, key=lambda n: (-len(os.path.splitext(n)[0]),
+                                          len(n), n.casefold()))
+        return os.path.join(folder, lst[0])
+
+    order = (video, audio) if prefer_video else (audio,)
+    for lst in order:
+        p = pick(lst)
+        if p:
+            return p
+    return None

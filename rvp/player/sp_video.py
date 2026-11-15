@@ -11,6 +11,7 @@ from ..i18n import tr
 
 from .clock import PlaybackClock
 from .common import logger
+from .sp_devices import ds_lanes
 
 
 class _ScenarioPlayerVideoMixin:
@@ -78,6 +79,10 @@ class _ScenarioPlayerVideoMixin:
         # 再生開始時の変数操作(音声アイテムと同じタイミング)
         self._apply_ops(item.on_play, tr("アイテム再生時"))
 
+        if self._device_output_on():
+            # =378: 直前のスクリプトのみアイテムが保留した停止は、この動画が
+            # 動かすレーンについていま送る(音声アイテムと同じ)
+            await self._ds_flush(ds_lanes(t.type for t in item.tracks))
         fs_tasks, had, graph_segs = self._start_video_tracks(
             item, clock, device_types)
         completed = False

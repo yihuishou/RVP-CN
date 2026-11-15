@@ -95,8 +95,20 @@ EMPTY_VIEW_MS = 30_000    # 仕様 4.9: 音声もスクリプトも無いとき�
 
 
 # =243: 音声波形の帯の色(ライト系=背景よりやや濃い / ダーク=やや薄い)。
-# 基準線(C_GRID_POS_SUB)より控えめで、点・線・基準線の背面に描く。
-WAVE_BAND_COLOR = ("#dcdcdc", "#3f3f3f")
+# 点・線・基準線の背面に描く。
+# =381: 薄すぎるとの FB で濃くした(ユーザー決定 W1。旧 #dcdcdc/#3f3f3f)。
+# 位置の主な基準線(C_GRID_POS #9e9e9e/#6e6e6e)よりは薄いまま。
+WAVE_BAND_COLOR = ("#c4c4c4", "#555555")
+
+
+def wave_band_ratio(v: float, peak: float) -> float:
+    """=381: 帯の高さの比(0〜1)。素材のピークに対する振幅の比を**平方根**で
+    強調する(ユーザー決定 W2/W3=常に平方根)。小さい音(−26dB/−38dB 等)も
+    音のある場所が見え、大小の差も残る。表示だけの補正(音声は変えない)。"""
+    if peak <= 0 or v <= 0:
+        return 0.0
+    r = float(v) / float(peak)
+    return 1.0 if r >= 1.0 else r ** 0.5
 
 
 WAVE_BAND_STEP_PX = 2       # 帯を作る横方向の刻み(px)
@@ -105,7 +117,8 @@ WAVE_BAND_STEP_PX = 2       # 帯を作る横方向の刻み(px)
 def draw_audio_band(canvas, chan, bucket_ms: int, peak: int,
                     px0: float, px1: float, ms_of_px, cy: float,
                     half_h: float, color: str) -> None:
-    """音声波形(振幅エンベロープ)の帯を1本描く(=243)。
+    """音声波形(振幅エンベロープ)の帯を1本描く(=243。=381 で高さは
+    wave_band_ratio=平方根で強調)。
 
     chan: 10ms などのバケットごとのピーク列(array)。cy を中央線として
     上下対称の帯(create_polygon)にする。素材範囲の外は描かない。
@@ -116,7 +129,6 @@ def draw_audio_band(canvas, chan, bucket_ms: int, peak: int,
     if n <= 0 or peak <= 0 or half_h <= 1:
         return
     dur = n * bucket_ms
-    scale = float(half_h) / float(peak)
     step = WAVE_BAND_STEP_PX
     tops: list = []
     bots: list = []
@@ -142,7 +154,7 @@ def draw_audio_band(canvas, chan, bucket_ms: int, peak: int,
         b0 = max(0, int(t0 // bucket_ms))
         b1 = min(n, max(b0 + 1, -(-int(t1) // bucket_ms)))
         v = max(chan[b0:b1]) if b1 > b0 else 0
-        y = v * scale
+        y = wave_band_ratio(v, peak) * half_h       # =381: 平方根で強調
         tops += [x, cy - y]
         bots.append((x, cy + y))
         x += step

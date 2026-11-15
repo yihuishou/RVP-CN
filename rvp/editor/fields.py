@@ -390,3 +390,28 @@ def _range_dict(start_var, end_var) -> dict | None:
             continue          # 0=先頭は既定なのでキーを書かない
         out[key] = v
     return out or None
+
+
+# ---- =374: タイムリミットの秒欄(定数 or 数値変数) ----
+
+def load_secs_field(field, sraw) -> None:
+    """timeout.seconds(数値 or {"var": 名})を VarRefField へ読み込む。"""
+    if isinstance(sraw, dict):
+        field.set(sraw)
+    else:
+        try:
+            field.set(f"{float(sraw or 0):g}")
+        except (TypeError, ValueError):
+            field.set(str(sraw))
+
+
+def collect_secs_field(field):
+    """VarRefField から timeout.seconds を返す。不正(0以下・空・変数未選択)は None。"""
+    raw = field.get_raw()
+    if isinstance(raw, dict):
+        return raw if raw.get("var") else None
+    try:
+        total = float(raw or 0)
+    except ValueError:
+        return None
+    return round(total, 3) if total > 0 else None

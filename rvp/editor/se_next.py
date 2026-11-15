@@ -8,7 +8,9 @@ from ..i18n import tr
 
 from .common import (CHANNEL_IDS, CTkOptionMenu, MUTED, TEXT_MUTED,
     _num_disp, _parse_num_text)
-from .fields import CondListEditor, VarRefField
+from .fields import (CondListEditor, VarRefField, collect_secs_field,
+    load_secs_field)
+from .choice_color import bind_choice_color
 from . import common as _clr   # =301: テーマ追従する色定数は定義元を参照
 
 
@@ -353,6 +355,7 @@ class _ScenarioEditorNextMixin:
         label_entry.pack(side="left", padx=(2, 0), fill="x", expand=True)
         entry.update({"label_var": label_var, "label_entry": label_entry,
                       "to_var": to_var, "to_menu": to_menu})
+        bind_choice_color(self, entry)          # =363: 右クリックで色
         self._update_choice_ops_btn(entry)
         self._update_choice_when_btn(entry)
         self.choice_rows.append(entry)
@@ -452,6 +455,7 @@ class _ScenarioEditorNextMixin:
             # 時間指定は秒のみ(分欄は廃止)
             self.choice_tsec_entry.pack(side="left", padx=(6, 2))
             self.choice_tsec_label.pack(side="left")
+            self.choice_hrem_check.pack(side="left", padx=(10, 0))   # =357
             if self._has_vars():
                 self._update_choice_toops_btn()
                 self.choice_toops_btn.pack(side="left", padx=(10, 0))
@@ -460,7 +464,7 @@ class _ScenarioEditorNextMixin:
         else:
             for w in (self.choice_tmin_entry, self.choice_tmin_label,
                       self.choice_tsec_entry, self.choice_tsec_label,
-                      self.choice_toops_btn):
+                      self.choice_hrem_check, self.choice_toops_btn):
                 w.pack_forget()
         if self.choice_dflt_var.get() == tr("指定イベントへ"):
             self.choice_dflt_to_menu.pack(side="left", padx=(6, 0))
@@ -501,8 +505,11 @@ class _ScenarioEditorNextMixin:
         self._choice_extra = {k: v for k, v in nxt.items()
                               if k not in ("choice", "timeout", "default",
                                            "show", "on_timeout", "skip",
-                                           "hide_visited", "when_all_hidden")}
+                                           "hide_visited", "when_all_hidden",
+                                           "hide_remaining")}
         self._choice_timeout_ops = list(nxt.get("on_timeout") or [])
+        # =357: 残り時間を隠す
+        self.choice_hrem_var.set(nxt.get("hide_remaining") is True)
         # =274: 選択必須(skip=stay)
         self.choice_stay_var.set(nxt.get("skip") == "stay")
         # =352: 訪問済みを隠す/全部隠れたときの行き先
@@ -519,10 +526,12 @@ class _ScenarioEditorNextMixin:
         if not self.choice_rows:
             self._add_choice_row()
         traw = nxt.get("timeout")
+        # =374: 秒欄は数値変数も選べる(変数名の候補をここで更新)
+        self.choice_tsec_field.set_names(self._numeric_var_names())
         if isinstance(traw, dict):
             self.choice_tlim_var.set(tr("時間指定"))
             # 時間指定は秒のみ(minutesは廃止=読まない)
-            self.choice_tsec_var.set(f"{float(traw.get('seconds', 0)):g}")
+            load_secs_field(self.choice_tsec_field, traw.get("seconds", 0))
         else:
             self.choice_tlim_var.set(tr("無制限"))
         # デフォルト遷移先(旧形式timeout.toは「指定イベントへ」として読み込む)
@@ -567,14 +576,15 @@ class _ScenarioEditorNextMixin:
             return tr("イベント {0}: 選択肢は1〜9件にしてください").format(event_id), None
         value = {"choice": entries}
         if self.choice_tlim_var.get() == tr("時間指定"):
-            # 時間指定は秒のみ(分欄は廃止)
-            try:
-                total = float(self.choice_tsec_var.get() or 0)
-            except ValueError:
-                total = 0
-            if total <= 0:
+            # 時間指定は秒のみ(分欄は廃止)。=374: 数値変数も可
+            secs = collect_secs_field(self.choice_tsec_field)
+            if secs is None:
+                self._want_mark(self.choice_tsec_field, "error")
                 return tr("イベント {0}: タイムリミットの時間が不正です").format(event_id), None
-            value["timeout"] = {"seconds": round(total, 3)}
+            value["timeout"] = {"seconds": secs}
+            # =357: 残り時間を隠す(タイムリミットがあるときだけ書く。既定 false は省略)
+            if self.choice_hrem_var.get():
+                value["hide_remaining"] = True
         # デフォルト遷移先(先頭=既定なので省略。旧timeout.toはdefaultへ移行して保存)
         dflt = self.choice_dflt_var.get()
         if dflt == tr("選択肢から等確率で抽選"):

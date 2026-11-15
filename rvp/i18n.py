@@ -1757,6 +1757,11 @@ EN: dict[str, str] = {
     # =299: イベント図の配置モード
     "配置：自動": "Layout: auto",
     "配置：手動": "Layout: manual",
+    # =371: イベント図の矢印の引き方
+    "矢印：直線/曲線": "Arrows: straight/curved",
+    "矢印：カギ線": "Arrows: right-angle",
+    'map_edges は "straight" か "orthogonal" で指定してください':
+        'map_edges must be "straight" or "orthogonal"',
     # =300: イベント遷移図のドッキング解除
     "ドッキング解除": "Undock",
     "ドッキング": "Dock",
@@ -2101,4 +2106,64 @@ EN: dict[str, str] = {
     '{0}: to は文字列か {{"random": [...]}} か {{"cond": [...]}} で指定してください': '{0}: to must be a string, {{"random": [...]}}, or {{"cond": [...]}}',
     '{0}: 動画チャンネルの終了条件が「無限」のときは、イベントの終了条件(合計時間・変数条件・指定チャンネル終了など)が必要です': '{0}: when a video channel\'s end condition is "infinite", the event needs an end condition (total time, variable condition, specified channel end, etc.)',
     '{0}行目': 'line {0}',
+
+    # =357 選択肢の残り時間を隠す
+    '残り時間を隠す': 'Hide time left',
+    '残り ??:??': 'Time left ??:??',
+    '制限??秒': 'limit ??s',
+    '{0}: hide_remaining は true / false で指定してください': '{0}: hide_remaining must be true or false',
+    # =358/=359 再生タブの表示制限(ノードごと)
+    '再生タブ:': 'Play tab:',
+    '再生時間を隠す': 'Hide playback time',
+    'シーク操作を禁止': 'Disable seeking',
+    '{0}: {1} は true / false で指定してください': '{0}: {1} must be true or false',
+    '{0}: ステート形式では {1} は各ステートに指定してください': '{0}: in state form, specify {1} in each state',
+    # =361
+    '(シーク禁止)': '(seek disabled)',
+    # =366 再生タブの操作部品を隠す
+    '再生タブの操作': 'Play tab controls',
+    '視聴者に使わせたくない操作部品を隠します(作成者の指定がそのまま効きます)。': "Hide controls you don't want viewers to use (your setting applies as-is).",
+    '◀◀/▶▶(イベントの巻き戻し/スキップ)ボタンを隠す': 'Hide the ◀◀/▶▶ (rewind/skip event) buttons',
+    '「自動選択(ランダム)」チェックを隠す(再生中は自動選択オフとして扱う)': 'Hide the "Auto-select (random)" checkbox (treated as off during playback)',
+    'play_controls はオブジェクトで指定してください': 'play_controls must be an object',
+    'play_controls: {0} は true/false で指定してください': 'play_controls: {0} must be true or false',
+    'play_controls: 知らないキーがあります: {0}': 'play_controls: unknown keys: {0}',
+    # =367 再生オプションの並びと文言
+    '再生タブ': 'Play tab',
+    'シナリオ再生中に視聴者に使わせたくない機能を非表示にします。': "Hides features you don't want viewers to use during playback.",
+    '「◀◀/▶▶」ボタン(イベントの巻き戻し/スキップ)を表示しない': 'Don\'t show the "◀◀/▶▶" buttons (rewind/skip event)',
+    '「自動選択(ランダム)」チェックを表示しない': 'Don\'t show the "Auto-select (random)" checkbox',
+    'シナリオ再生中のネタバレ防止の為、イベント遷移図の見せたくない範囲を非表示にします。': "To avoid spoilers during playback, hides the parts of the event map you don't want to show.",
+    '未到達のイベント名を「？」表示にする': 'Show unreached event names as "?"',
+    '未通過の矢印を隠す': 'Hide arrows not yet taken',
+    '未到達のイベント・未通過の矢印を完全に隠す': 'Completely hide unreached events and untaken arrows',
+    # =374 選択肢のタイムリミットに変数
+    'タイムリミットの変数 {0} が {1} のため、この選択肢は無制限にします': 'Time-limit variable {0} is {1}, so this choice has no time limit',
+    '{0} timeout.seconds': '{0} timeout.seconds',
+    # =379 Fキーの配置モード(押している間だけ)・開始位置
+    'Fキーの配置モード': 'F-key placement',
+    '丸ごと配置': 'Whole pattern',
+    '押している間だけ': 'While held',
+    '開始位置': 'Start at',
+    '先頭から': 'Beginning',
+    '{0}: {1}秒から引用': '{0}: from {1} s into the pattern',
+    "Fキーの配置モード（Ctrl+H で切り替え）\n丸ごと配置: 押した位置からパターンを最後まで置きます（パターン=緑）\n押している間だけ: 再生中、押している間だけパターンの動きを書き込み、離した位置で停止を打ちます（普通の点=青）。停止中は丸ごと配置":
+        "F-key placement (Ctrl+H toggles)\n"
+        "Whole pattern: place the whole pattern from the press position (pattern = green)\n"
+        "While held: during playback, write the pattern's motion only while the key is held "
+        "and add a stop where it is released (plain points = blue). When stopped, the whole pattern is placed",
+    "押している間だけ配置するときの開始位置（Ctrl+R で切り替え）\n先頭から: パターンの0秒から\nランダム: パターンの途中（0.1秒刻み）からランダムに引用。押し続けて2本目以降は0秒から":
+        "Where \"While held\" starts in the pattern (Ctrl+R toggles)\n"
+        "Beginning: from 0 s of the pattern\n"
+        "random: from a random point in the pattern (0.1 s steps); "
+        "when held into the next repeat, it starts from 0 s",
+    # =380 メイン画面からのスクリプト編集・D&D・参考メディア
+    'スクリプト編集 - RVP': 'Edit script - RVP',
+    '対応していないファイルです: {0}': 'Unsupported file: {0}',
+    'シナリオのアイテムでは音声・動画は差し替えられません（funscript/csv は読み込めます）': "A scenario item's audio/video can't be replaced here (funscript/csv can be loaded)",
+    'ファイルが見つかりません': 'file not found',
+    # =382 案内文をユーザー指定の文言へ
+    '(funscript/csvをD&Dで読み込めます)': '(drag & drop funscript/csv to load)',
+    '音声・動画(D&D可)': 'Audio/video (drag & drop)',
+    '別の種別のスクリプトを新しく作る': 'Create a new script of another type',
 }

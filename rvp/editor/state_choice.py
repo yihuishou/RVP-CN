@@ -6,7 +6,9 @@ import tkinter as tk
 from ..i18n import tr
 
 from .common import CTkOptionMenu, MUTED, TEXT_MUTED
+from .choice_color import bind_choice_color
 from . import common as _clr   # =352 テーマ追従の色は定義元を参照
+from .fields import VarRefField, collect_secs_field, load_secs_field   # =374
 
 
 class StateChoiceEditor(ctk.CTkFrame):
@@ -64,12 +66,21 @@ class StateChoiceEditor(ctk.CTkFrame):
             values=[self.TLIM_NONE, self.TLIM_SEC],
             fg_color=("gray75", "gray28"), button_color=("gray70", "gray33"),
             command=lambda _v: self.update_ui()).pack(side="left", padx=6)
-        self.tsec_var = tk.StringVar(value="30")
-        self.tsec_entry = ctk.CTkEntry(tlim_row, textvariable=self.tsec_var,
-                                       width=42, height=26, justify="right")
+        # =374: 秒は定数 or 数値変数参照(VarRefField)。tsec_var は入力欄の
+        # テキスト(従来名を残す)、tsec_entry は欄全体
+        self.tsec_field = VarRefField(tlim_row, width=42)
+        self.tsec_field.entry.configure(justify="right")
+        self.tsec_var = self.tsec_field.text_var
+        self.tsec_var.set("30")
+        self.tsec_entry = self.tsec_field
         self.tsec_label = ctk.CTkLabel(tlim_row, text=tr("秒"),
                                        font=ctk.CTkFont(size=11),
                                        text_color=TEXT_MUTED)
+        # =357: 残り時間を「??:??」と伏せる(「時間指定」のときだけ出す=Q8)
+        self.hrem_var = tk.BooleanVar(value=False)
+        self.hrem_check = ctk.CTkCheckBox(
+            tlim_row, text=tr("残り時間を隠す"), variable=self.hrem_var,
+            font=ctk.CTkFont(size=12), checkbox_width=18, checkbox_height=18)
         self.toops_btn = ctk.CTkButton(
             tlim_row, text="", width=150, height=24,
             font=ctk.CTkFont(size=11),
@@ -240,6 +251,7 @@ class StateChoiceEditor(ctk.CTkFrame):
         entry.update({"label_var": label_var, "label_entry": label_entry,
                       "to_var": to_var, "to_menu": to_menu,
                       "kind_menu": kind_menu})
+        bind_choice_color(self.owner, entry)    # =363: 右クリックで色
         self._update_ops_btn(entry)
         self._update_when_btn(entry)
         self.rows.append(entry)
@@ -341,13 +353,15 @@ class StateChoiceEditor(ctk.CTkFrame):
         if self.tlim_var.get() == self.TLIM_SEC:
             self.tsec_entry.pack(side="left", padx=(6, 2))
             self.tsec_label.pack(side="left")
+            self.hrem_check.pack(side="left", padx=(10, 0))   # =357
             if self.owner._has_vars():
                 self._update_toops_btn()
                 self.toops_btn.pack(side="left", padx=(10, 0))
             else:
                 self.toops_btn.pack_forget()
         else:
-            for w in (self.tsec_entry, self.tsec_label, self.toops_btn):
+            for w in (self.tsec_entry, self.tsec_label, self.hrem_check,
+                      self.toops_btn):
                 w.pack_forget()
         d = self.dflt_var.get()
         if d in (self.DFLT_STATE, self.DFLT_EVENT):
@@ -395,8 +409,10 @@ class StateChoiceEditor(ctk.CTkFrame):
         self.extra = {k: v for k, v in t.items()
                       if k not in ("when", "choice", "timeout", "default",
                                    "show", "on_timeout", "skip",
-                                   "hide_visited", "when_all_hidden")}
+                                   "hide_visited", "when_all_hidden",
+                                   "hide_remaining")}
         self.timeout_ops = list(t.get("on_timeout") or [])
+        self.hrem_var.set(t.get("hide_remaining") is True)     # =357
         self.stay_var.set(t.get("skip") == "stay")
         # =352
         self.hv_var.set(t.get("hide_visited") is True)
@@ -416,9 +432,11 @@ class StateChoiceEditor(ctk.CTkFrame):
         if not self.rows:
             self.add_row()
         traw = t.get("timeout")
+        # =374: 秒欄は数値変数も選べる
+        self.tsec_field.set_names(self.owner._numeric_var_names())
         if isinstance(traw, dict):
             self.tlim_var.set(self.TLIM_SEC)
-            self.tsec_var.set(f"{float(traw.get('seconds', 0)):g}")
+            load_secs_field(self.tsec_field, traw.get("seconds", 0))
         else:
             self.tlim_var.set(self.TLIM_NONE)
         draw = t.get("default")
@@ -468,14 +486,13 @@ class StateChoiceEditor(ctk.CTkFrame):
             return tr("{0}: 選択肢は1〜9件にしてください").format(where), None
         value = {"when": {"type": "choice"}, "choice": entries}
         if self.tlim_var.get() == self.TLIM_SEC:
-            try:
-                total = float(self.tsec_var.get() or 0)
-            except ValueError:
-                total = 0
-            if total <= 0:
+            secs = collect_secs_field(self.tsec_field)     # =374
+            if secs is None:
                 mark(self.tsec_entry, "error")
                 return tr("{0}: タイムリミットの時間が不正です").format(where), None
-            value["timeout"] = {"seconds": round(total, 3)}
+            value["timeout"] = {"seconds": secs}
+            if self.hrem_var.get():       # =357(既定 false は省略)
+                value["hide_remaining"] = True
         d = self.dflt_var.get()
         if d == self.DFLT_RANDOM:
             value["default"] = "random"
